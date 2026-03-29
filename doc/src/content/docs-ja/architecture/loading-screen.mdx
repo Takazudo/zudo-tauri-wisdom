@@ -1,0 +1,265 @@
+---
+title: ローディング画面
+description: バックグラウンドプロセスの起動中にローディングページを即座に表示するパターン
+sidebar_position: 3
+---
+
+# ローディング画面パターン
+
+Tauri アプリが開発サーバーをラップしたり sidecar プロセスを起動したりする場合、起動に遅延が生じる -- サーバーのコンパイルと配信開始までに通常 5〜30 秒かかる。ローディング画面がなければ、この間ユーザーには空白のウィンドウか、あるいはウィンドウすら表示されない。
+
+ローディング画面パターンは、軽量な HTML ページを即座に表示し、サーバーの準備が完了したら実際のコンテンツにナビゲートすることで、この問題を解決する。
+
+## 最重要ルール
+
+<Warning>
+
+**`setup()` 内でビルド完了を待ってはならない。** ウィンドウ生成前に `setup()` 内で `wait_for_build()` を呼ぶと、アプリがハングしたように見える -- ウィンドウなし、Dock インジケータなし、何もなし。ユーザーはアプリが起動中であることを認識できない。これは Tauri デスクトップアプリにおける最悪の UX ミスである。
+
+</Warning>
+
+以下は**間違った**方法:
+
+```rust
+// 悪い例: setup() をブロックし、30秒以上ウィンドウが表示されない
+.setup(|app| {
+    wait_for_build(Duration::from_secs(120));  // ここでブロック！
+
+    let url = format!("http://localhost:{PORT}/");
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().unwrap()))
+        .build()?;
+
+    Ok(())
+})
+```
+
+そして以下が**正しい**方法:
+
+```rust
+// 良い例: ローディングページとともにウィンドウが即座に表示される
+.setup(|app| {
+    // ローディングページで今すぐウィンドウを表示
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+        .title("My App")
+        .inner_size(1200.0, 800.0)
+        .build()?;
+
+    // バックグラウンドでポーリングし、準備完了時にナビゲート
+    let handle = app.handle().clone();
+    thread::spawn(move || {
+        wait_for_ready(Duration::from_secs(120));
+        if let Some(w) = handle.get_webview_window("main") {
+            let url: tauri::Url = server_url().parse().unwrap();
+            let _ = w.navigate(url);
+        }
+    });
+
+    Ok(())
+})
+```
+
+## WebviewUrl::default() の動作
+
+`WebviewUrl::default()` は `tauri.conf.json` の `frontendDist` で指定されたディレクトリから `index.html` を読み込む:
+
+```json
+{
+  "build": {
+    "frontendDist": "./frontend"
+  }
+}
+```
+
+つまり `./frontend/index.html` がローディングページとなる。これはコンパイル時にアプリ binary にバンドルされ、即座に読み込まれる -- サーバーは不要である。
+
+## ローディングページの HTML
+
+ローディングページは最小限で、自己完結し（外部依存なし）、視覚的に心地よいものであるべきだ:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #181818;
+    color: #b8b8b8;
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    gap: 1.5rem;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #383838;
+    border-top-color: #d69a66;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .text { font-size: 1.1rem; color: #888; }
+  .sub { font-size: 0.85rem; color: #555; }
+</style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <div class="text">Starting documentation server...</div>
+  <div class="sub">This may take a moment on first launch</div>
+</body>
+</html>
+```
+
+主な設計判断:
+
+- **ダーク背景**（`#181818`） -- 一般的な開発ツールの美観に合わせ、眩しい白のフラッシュを防ぐ
+- **純粋な CSS スピナー** -- JavaScript や外部リソース不要
+- **システムフォント** -- 即座に読み込まれ、フォントのダウンロード不要
+- **中央配置レイアウト** -- どのウィンドウサイズでも機能する
+- **情報提供メッセージ** -- 何かが進行中であることをユーザーに伝える
+
+## 完全なパターン: 開発 vs プロダクション
+
+ローディング画面はプロダクションモードでのみ必要である。開発モードでは、`beforeDevCommand` により WebView が開く前にサーバーがすでに起動している。
+
+```rust
+const IS_DEV: bool = cfg!(debug_assertions);
+
+// setup() 内:
+if IS_DEV {
+    // 開発: beforeDevCommand によりサーバーはすでに起動済み
+    let url: tauri::Url = server_url().parse().unwrap();
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+        .title("My App")
+        .inner_size(1200.0, 800.0)
+        .build()?;
+} else {
+    // プロダクション: ローディングページを表示し、サーバー準備完了時にナビゲート
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+        .title("My App")
+        .inner_size(1200.0, 800.0)
+        .build()?;
+
+    let handle = app.handle().clone();
+    thread::spawn(move || {
+        wait_for_ready(Duration::from_secs(120));
+        if let Some(w) = handle.get_webview_window("main") {
+            let url: tauri::Url = server_url().parse().unwrap();
+            let _ = w.navigate(url);
+        }
+    });
+}
+```
+
+## バックグラウンドスレッドによるポーリング
+
+準備状態の確認は、サーバーがエラーでない HTTP ステータスを返すまでポーリングする:
+
+```rust
+fn check_ready() -> String {
+    Command::new("/usr/bin/curl")
+        .args([
+            "-s",
+            "-o", "/dev/null",
+            "-w", "%{http_code}",
+            &format!("http://localhost:{PORT}/"),
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "err".to_string())
+}
+
+fn wait_for_ready(timeout: Duration) {
+    log("wait_for_ready: start");
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        let code = check_ready();
+        log(&format!("curl: {code} ({}s)", start.elapsed().as_secs()));
+        if code != "000" && code != "err" {
+            log("wait_for_ready: ready");
+            thread::sleep(Duration::from_secs(1));
+            return;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    log("wait_for_ready: TIMEOUT");
+}
+```
+
+<Note>
+
+ここでは絶対パスで `/usr/bin/curl` を使用している。これは意図的である -- `/usr/bin/curl` は macOS で PATH 環境に関係なく常に利用可能であるため、開発モードとプロダクションモードの両方で動作する。
+
+</Note>
+
+### なぜ Rust HTTP クライアントではなく curl なのか？
+
+`reqwest` や `ureq` を使って準備状態の確認を純粋に Rust で行うことも可能である。`curl` アプローチが選ばれたのは実用的な理由による:
+
+- 追加の依存関係が不要
+- `/usr/bin/curl` は macOS に必ず存在する
+- チェック内容は HTTP ステータスコードの取得だけという些細なもの
+- バックグラウンドスレッドで実行するため、プロセスの起動はパフォーマンス上の懸念にならない
+
+## シーケンス図
+
+起動シーケンスの全体像は以下のとおりである:
+
+```mermaid
+sequenceDiagram
+  participant User as ユーザー
+  participant Rust as Rust メイン
+  participant Window as WebView ウィンドウ
+  participant Sidecar as sidecar プロセス
+  participant Server as 開発サーバー
+
+  User->>Rust: .app を起動
+  Rust->>Sidecar: spawn_sidecar()
+  Rust->>Window: WebviewUrl::default() で生成
+  Window-->>User: ローディングページが即座に表示
+
+  Rust->>Rust: thread::spawn(ポーリングループ)
+
+  loop 1秒ごと
+    Rust->>Server: curl http://localhost:PORT/
+    Server-->>Rust: HTTP ステータスコード
+  end
+
+  Sidecar->>Server: サーバーがリッスン開始
+  Rust->>Server: curl が 200 を返す
+  Rust->>Window: navigate(server_url)
+  Window-->>User: 実際のコンテンツが表示
+```
+
+## リフレッシュパターン
+
+リフレッシュコマンド（Cmd+R）を実装する際に、同じローディング→ナビゲートのパターンを再利用できる:
+
+```rust
+fn do_refresh(app_handle: &AppHandle) {
+    if !IS_DEV {
+        let state = app_handle.state::<AppState>();
+        if let Some(ref pnpm_path) = state.pnpm_path {
+            let pnpm_path = pnpm_path.clone();
+            let mut guard = state.sidecar.lock().unwrap();
+            if let Some(mut old) = guard.take() {
+                kill_sidecar(&mut old);
+            }
+            kill_port();
+            *guard = Some(spawn_sidecar(&pnpm_path));
+            drop(guard);
+            wait_for_ready(Duration::from_secs(15));
+        }
+    }
+
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.navigate(server_url().parse().unwrap());
+    }
+}
+```
+
+この処理は、古い sidecar を kill し、ポートをクリーンアップし、新しい sidecar を起動し、準備完了を待ち、その後ナビゲートする。リフレッシュのタイムアウト（15秒）は初回起動のタイムアウト（120秒）より短い。これはサーバーが2回目以降の起動ではより速く起動することが期待されるためである。

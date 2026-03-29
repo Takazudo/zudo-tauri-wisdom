@@ -1,0 +1,164 @@
+---
+title: アプリバンドルのビルド
+description: cargo tauri build による .app バンドルのビルド、ターゲット設定、アイコン、インストール
+sidebar_position: 2
+---
+
+# アプリバンドルのビルド
+
+`cargo tauri build` コマンドは、Rust バックエンドをコンパイルし、フロントエンドアセットをバンドルし、macOS 向けの配布可能な `.app` バンドルを生成する。
+
+## 基本的なビルド
+
+```bash
+cargo tauri build
+```
+
+これにより、以下のパイプライン全体が実行される。
+
+1. `tauri.conf.json` の `beforeBuildCommand` を実行（フロントエンドビルド）
+2. Rust コードをリリースモードでコンパイル
+3. `frontendDist` ディレクトリをバイナリに埋め込み
+4. `.app` バンドルを作成
+
+出力は以下の場所に生成される。
+
+```
+target/release/bundle/macos/YourApp.app
+```
+
+## バンドル設定
+
+`tauri.conf.json` でバンドルを設定する。
+
+```json
+{
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### バンドルターゲット
+
+`targets` フィールドで、作成するバンドル形式を制御する。
+
+| 値 | 出力 |
+|-------|--------|
+| `"all"` | 利用可能なすべての形式（`.app`、`.dmg`） |
+| `["app"]` | `.app` バンドルのみ |
+| `["dmg"]` | `.dmg` ディスクイメージのみ |
+
+開発のイテレーションでは、`.app` のみをビルドする方が `.dmg` 作成をスキップできるため高速である。
+
+### カテゴリ
+
+`category` フィールドは macOS のアプリケーションカテゴリを設定する。Finder や App Store に表示される。一般的な値は以下の通りである。
+
+- `"DeveloperTool"` -- 開発者ツール向け
+- `"Productivity"` -- 生産性アプリ向け
+- `"Utility"` -- 一般的なユーティリティ向け
+
+### 最小システムバージョン
+
+```json
+{
+  "macOS": {
+    "minimumSystemVersion": "10.15"
+  }
+}
+```
+
+サポートする最も古い macOS バージョンを設定する。ほとんどのアプリでは `10.15`（Catalina）が妥当な最小値である。これより低く設定すると、新しい API との互換性の問題が生じる可能性がある。
+
+## アイコン設定
+
+Tauri は `bundle.icon` 配列で指定されたアイコンを参照する。
+
+```json
+{
+  "bundle": {
+    "icon": ["icons/icon.png"]
+  }
+}
+```
+
+配列が空または省略された場合、Tauri はデフォルトのアイコンを使用する。本番アプリでは、少なくとも1つの高解像度 PNG（1024x1024 を推奨）を提供すること。Tauri は必要な `.icns` ファイルを自動的に生成する。
+
+<Tip>
+
+アイコンのパスは `tauri.conf.json` からの相対パスである。アイコンのソースファイルは設定ファイルの隣に `icons/` ディレクトリを作成して配置するとよい。
+
+</Tip>
+
+## /Applications へのインストール
+
+ビルド後、`.app` バンドルを `/Applications` にインストールする。
+
+```bash
+# IMPORTANT: Remove old version first (see macOS Pitfalls)
+rm -rf /Applications/YourApp.app
+
+# Copy the new bundle
+cp -r target/release/bundle/macos/YourApp.app /Applications/
+
+# Clear quarantine flag (app is not signed)
+xattr -cr /Applications/YourApp.app
+```
+
+### 検疫フラグのクリア
+
+macOS はダウンロードおよびコピーされたアプリケーションに検疫フラグを付与する。署名されていないアプリ（開発時に典型的）の場合、このフラグをクリアする必要がある。
+
+```bash
+xattr -cr /Applications/YourApp.app
+```
+
+`-c` フラグはすべての拡張属性をクリアし、`-r` は再帰的に適用する。これがないと、macOS がアプリの起動を拒否したり、「破損している」という警告を表示することがある。
+
+<Note>
+
+検疫フラグは `.app` バンドルをコピーするたびに再付与される。新規インストールのたびに `xattr -cr` を実行する必要がある。
+
+</Note>
+
+### 置き換え前にプロセスを終了
+
+アプリが現在実行中の場合は、置き換え前にプロセスを終了させる。
+
+```bash
+killall YourApp 2>/dev/null || true
+rm -rf /Applications/YourApp.app
+cp -r target/release/bundle/macos/YourApp.app /Applications/
+xattr -cr /Applications/YourApp.app
+```
+
+## 代替設定でのビルド
+
+異なる `tauri.conf.json` ファイルでビルドする場合：
+
+```bash
+cargo tauri build --config tauri.conf.ztoffice.json
+```
+
+代替設定はベース設定の上にマージされるため、異なるフィールドのみを含めればよい。詳細は[マルチコンフィグ](../recipes/multi-config)を参照。
+
+## ビルドの検証
+
+ビルド後、バイナリが最新であることを確認する。
+
+```bash
+# Check the binary modification time
+stat -f "%Sm" target/release/bundle/macos/YourApp.app/Contents/MacOS/YourApp
+
+# Verify frontend assets are embedded (if applicable)
+# Search for a known string in the built JS
+grep -l "some-unique-string" target/release/bundle/macos/YourApp.app/Contents/Resources/*
+```
+
+タイムスタンプが古い場合や期待する文字列が見つからない場合は、[Cargo キャッシュ無効化](./cargo-cache)を参照。

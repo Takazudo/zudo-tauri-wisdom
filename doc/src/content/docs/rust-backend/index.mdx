@@ -1,0 +1,60 @@
+---
+title: Rust Backend Patterns
+description: Overview of Tauri v2 Rust backend patterns for building robust desktop applications.
+sidebar_position: 1
+---
+
+This section covers battle-tested Rust backend patterns for Tauri v2 applications. These patterns are not framework-specific theories -- they come from real production apps and address problems you will actually encounter.
+
+## What you will find here
+
+### Mutex Safety
+
+Tauri commands receive shared state through `State<AppState>`. That state is typically protected by `Mutex`, and using it incorrectly will crash your application. The [Mutex Safety](/rust-backend/mutex-safety/) page covers the rules.
+
+### Settings Cache with External Edit Detection
+
+Reading settings from disk on every IPC call is wasteful, but naive caching breaks when the user (or another application) edits the file externally. The [Settings Cache](/rust-backend/settings-cache/) page shows an mtime-based invalidation strategy.
+
+### Debounced File Watchers
+
+File system watchers fire rapidly and redundantly. The [File Watchers](/rust-backend/file-watchers/) page covers a generic debounced watch loop, `Send`-safety patterns for background threads, and write markers to distinguish app writes from external changes.
+
+### Menu Event Handlers
+
+`on_menu_event` runs on the main thread. Blocking it freezes the entire application. The [Menu Events](/rust-backend/menu-events/) page shows the correct patterns for spawning background work from menu handlers.
+
+### Window Management
+
+Creating windows programmatically gives you control over splash screens, dev server polling, and platform-specific behaviors. The [Window Management](/rust-backend/window-management/) page covers the full window lifecycle.
+
+## Common architecture
+
+A typical Tauri v2 Rust backend follows this structure:
+
+```
+src/
+  main.rs          # Builder setup, invoke_handler, setup()
+  state.rs         # AppState definition (Mutex-wrapped fields)
+  commands/
+    mod.rs         # Module declarations
+    files.rs       # File operation commands
+    settings.rs    # Settings read/write with cache
+    watchers.rs    # File watcher management
+    terminal.rs    # PTY/process commands
+    workspace.rs   # Workspace switching
+  native/
+    mod.rs         # Module declarations
+    menu.rs        # Menu creation and event handlers
+    window.rs      # Window creation and lifecycle
+    dialog.rs      # Native dialogs
+  helpers/
+    ...            # Utility functions
+```
+
+The key architectural decisions:
+
+1. **Single `AppState` struct** with all shared state behind `Mutex` fields
+2. **Arc wrapping** -- `AppState` is wrapped in `Arc` so it can be shared between the Tauri runtime and background threads (e.g., HTTP server)
+3. **Commands in dedicated modules** -- each command module focuses on one domain
+4. **Platform-specific code** behind `#[cfg(target_os = "macos")]` guards

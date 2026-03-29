@@ -1,0 +1,221 @@
+---
+title: Node.js のバンドル
+description: Tauri アプリにスタンドアロンの Node.js バイナリを同梱するためのダウンロードスクリプト
+sidebar_position: 5
+---
+
+# Node.js のバンドル
+
+一部の Tauri アプリでは、Node.js をサイドカープロセスとして実行する必要がある（例えば、開発サーバーやビルドツールの実行）。ユーザーに Node.js のインストールを要求する代わりに、スタンドアロンの Node.js バイナリをアプリにバンドルできる。
+
+## Node.js をバンドルする理由
+
+- **ユーザー側の依存関係が不要** -- アプリがそのまま動作する
+- **バージョン固定** -- 実行される Node.js のバージョンを完全に制御できる
+- **再現性** -- 異なるマシン上の異なる Node.js バージョンによる予期しない問題を防止できる
+
+## ダウンロードスクリプト
+
+以下の bash スクリプトは、ターゲットプラットフォーム向けの Node.js スタンドアロンバイナリをダウンロードし、SHA256 チェックサムを検証し、展開した後、ターゲットトリプルのサフィックスを付けてリネームする（Tauri がサイドカーバイナリに要求する命名規則）。
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# Configuration
+NODE_VERSION="v20.11.1"
+NODE_BASE_URL="https://nodejs.org/dist/${NODE_VERSION}"
+
+# Detect platform
+ARCH=$(uname -m)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+case "$ARCH" in
+  x86_64)  NODE_ARCH="x64" ;;
+  arm64)   NODE_ARCH="arm64" ;;
+  aarch64) NODE_ARCH="arm64" ;;
+  *)
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+case "$OS" in
+  darwin) NODE_OS="darwin" ;;
+  linux)  NODE_OS="linux" ;;
+  *)
+    echo "Unsupported OS: $OS"
+    exit 1
+    ;;
+esac
+
+TARBALL="node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}.tar.gz"
+DOWNLOAD_URL="${NODE_BASE_URL}/${TARBALL}"
+SHASUMS_URL="${NODE_BASE_URL}/SHASUMS256.txt"
+
+# Target triple for Tauri sidecar naming
+case "$OS-$ARCH" in
+  darwin-arm64)  TARGET_TRIPLE="aarch64-apple-darwin" ;;
+  darwin-x86_64) TARGET_TRIPLE="x86_64-apple-darwin" ;;
+  linux-x86_64)  TARGET_TRIPLE="x86_64-unknown-linux-gnu" ;;
+  linux-aarch64) TARGET_TRIPLE="aarch64-unknown-linux-gnu" ;;
+  linux-arm64)   TARGET_TRIPLE="aarch64-unknown-linux-gnu" ;;
+  *)
+    echo "Unsupported platform: $OS-$ARCH"
+    exit 1
+    ;;
+esac
+
+# Output directory
+BINARIES_DIR="./binaries"
+mkdir -p "$BINARIES_DIR"
+
+echo "Downloading Node.js ${NODE_VERSION} for ${NODE_OS}-${NODE_ARCH}..."
+
+# Download tarball
+curl -fsSL "$DOWNLOAD_URL" -o "/tmp/${TARBALL}"
+
+# Download and verify SHA256
+echo "Verifying SHA256 checksum..."
+EXPECTED_SHA=$(curl -fsSL "$SHASUMS_URL" | grep "$TARBALL" | awk '{print $1}')
+
+if [ -z "$EXPECTED_SHA" ]; then
+  echo "ERROR: Could not find SHA256 for $TARBALL"
+  exit 1
+fi
+
+ACTUAL_SHA=$(shasum -a 256 "/tmp/${TARBALL}" | awk '{print $1}')
+
+if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+  echo "ERROR: SHA256 mismatch!"
+  echo "  Expected: $EXPECTED_SHA"
+  echo "  Actual:   $ACTUAL_SHA"
+  rm -f "/tmp/${TARBALL}"
+  exit 1
+fi
+
+echo "SHA256 verified: $ACTUAL_SHA"
+
+# Extract the node binary
+echo "Extracting node binary..."
+tar -xzf "/tmp/${TARBALL}" \
+  -C /tmp \
+  "node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}/bin/node"
+
+# Move and rename with target triple
+OUTPUT_NAME="node-${TARGET_TRIPLE}"
+mv "/tmp/node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}/bin/node" \
+   "${BINARIES_DIR}/${OUTPUT_NAME}"
+
+# Make executable
+chmod +x "${BINARIES_DIR}/${OUTPUT_NAME}"
+
+# Clean up
+rm -rf "/tmp/${TARBALL}" \
+       "/tmp/node-${NODE_VERSION}-${NODE_OS}-${NODE_ARCH}"
+
+echo "Done: ${BINARIES_DIR}/${OUTPUT_NAME}"
+ls -lh "${BINARIES_DIR}/${OUTPUT_NAME}"
+```
+
+## 使い方
+
+スクリプトを `scripts/download-node.sh` として保存し、実行する。
+
+```bash
+chmod +x scripts/download-node.sh
+./scripts/download-node.sh
+```
+
+以下のファイルが作成される。
+
+```
+binaries/
+  node-aarch64-apple-darwin     (Apple Silicon Mac の場合)
+  node-x86_64-apple-darwin      (Intel Mac の場合)
+```
+
+## バイナリを .gitignore に追加
+
+Node.js のバイナリは大きい（60〜80MB）。git にコミットしてはならない。
+
+```gitignore
+# .gitignore
+binaries/
+```
+
+ビルドのセットアップや CI パイプラインの一部としてダウンロードすること。
+
+## Tauri サイドカー設定
+
+ダウンロードした Node.js を Tauri のサイドカーとして使用するには、`tauri.conf.json` に追加する。
+
+```json
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/node"
+    ]
+  }
+}
+```
+
+<Note>
+
+`externalBin` のパスにはターゲットトリプルのサフィックスを含めない。Tauri はビルドターゲットに基づいて正しいサフィックス（例：`-aarch64-apple-darwin`）を自動的に付加する。これが、ダウンロードスクリプトでバイナリにターゲットトリプルを付けて命名する理由である。
+
+</Note>
+
+Rust コードからの呼び出し方法は以下の通りである。
+
+```rust
+use tauri::Manager;
+use tauri_plugin_shell::ShellExt;
+
+// Spawn Node.js with a script
+let output = app_handle
+    .shell()
+    .sidecar("node")
+    .expect("failed to create sidecar command")
+    .args(["server.js"])
+    .output()
+    .await
+    .expect("failed to run node");
+```
+
+## SHA256 検証
+
+スクリプトは、Node.js が以下の URL で公開している公式 SHA256 チェックサムとダウンロードを照合する。
+
+```
+https://nodejs.org/dist/v20.11.1/SHASUMS256.txt
+```
+
+これにより、破損したバイナリや改ざんされたバイナリのインストールを防止する。チェックサムが一致しない場合、スクリプトはエラーで終了する。
+
+<Warning>
+
+バイナリをダウンロードする際に SHA256 検証を省略してはならない。破損した Node.js バイナリは、微妙でデバッグが不可能なランタイムエラーを引き起こす可能性があり、さらに悪い場合はサプライチェーン攻撃につながる。
+
+</Warning>
+
+## 複数プラットフォーム
+
+クロスコンパイルなどで複数のプラットフォーム向けに Node.js をバンドルする必要がある場合は、各ターゲットに対してスクリプトを1回ずつ実行する。
+
+```bash
+# On an Apple Silicon Mac, download for both architectures
+./scripts/download-node.sh  # Gets arm64 automatically
+
+# For cross-compilation, modify the script or download manually:
+# curl the x86_64 tarball and rename appropriately
+```
+
+`binaries/` ディレクトリにはターゲットごとに1つのバイナリが格納される。
+
+```
+binaries/
+  node-aarch64-apple-darwin
+  node-x86_64-apple-darwin
+  node-x86_64-unknown-linux-gnu
+```

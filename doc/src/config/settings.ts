@@ -1,0 +1,64 @@
+export type {
+  HeaderNavItem,
+  ColorModeConfig,
+  HtmlPreviewConfig,
+  LocaleConfig,
+  VersionConfig,
+  FooterConfig,
+} from "./settings-types";
+import type {
+  HeaderNavItem,
+  ColorModeConfig,
+  HtmlPreviewConfig,
+  LocaleConfig,
+  VersionConfig,
+  FooterConfig,
+} from "./settings-types";
+
+export const settings = {
+  colorScheme: "Default Dark",
+  colorMode: {
+    defaultMode: "dark",
+    lightScheme: "Default Light",
+    darkScheme: "Default Dark",
+    respectPrefersColorScheme: true,
+  } satisfies ColorModeConfig,
+  siteName: "zudo-tauri",
+  siteDescription: "Takazudo's Tauri dev notes for me and AI agents" as string,
+  base: "/pj/zudo-tauri",
+  trailingSlash: false as boolean,
+  noindex: false as boolean,
+  editUrl: false as string | false,
+  siteUrl: "" as string,
+  docsDir: "src/content/docs",
+  locales: {
+    ja: { label: "JA", dir: "src/content/docs-ja" },
+  } as Record<string, LocaleConfig>,
+  mermaid: true,
+  sitemap: false,
+  docMetainfo: true,
+  docTags: false,
+  llmsTxt: false,
+  math: false,
+  aiAssistant: false as boolean,
+  docHistory: false,
+  colorTweakPanel: false as boolean,
+  htmlPreview: undefined as HtmlPreviewConfig | undefined,
+  versions: false as VersionConfig[] | false,
+  claudeResources: {
+    claudeDir: ".claude",
+  } as { claudeDir: string; projectRoot?: string } | false,
+  footer: {
+    links: [],
+    copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>. Enjoy synth on <a href="https://takazudomodular.com/">Takazudo Modular</a>.`,
+  } satisfies FooterConfig,
+  headerNav: [
+    { label: "Overview", path: "/docs/getting-started", categoryMatch: "getting-started" },
+    { label: "Architecture", path: "/docs/architecture", categoryMatch: "architecture" },
+    { label: "Rust Backend", path: "/docs/rust-backend", categoryMatch: "rust-backend" },
+    { label: "Frontend", path: "/docs/frontend", categoryMatch: "frontend" },
+    { label: "Dev Server", path: "/docs/dev-server", categoryMatch: "dev-server" },
+    { label: "Deployment", path: "/docs/deployment", categoryMatch: "deployment" },
+    { label: "Recipes", path: "/docs/recipes", categoryMatch: "recipes" },
+  ] satisfies HeaderNavItem[],
+};

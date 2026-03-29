@@ -1,0 +1,54 @@
+---
+title: ビルドとデプロイ
+description: macOS 向け Tauri アプリのビルド、バンドル、デプロイ
+sidebar_position: 1
+---
+
+# ビルドとデプロイ
+
+Tauri アプリの本番ビルドは、他のフレームワークと比べてステップが多く、注意すべき点も多い。このセクションでは、`cargo tauri build` から `.app` バンドルをターゲットマシンにインストールするまでの、デプロイパイプライン全体をカバーする。
+
+## ビルドパイプライン
+
+```mermaid
+graph LR
+    A[フロントエンドビルド] --> B[Rust コンパイル]
+    B --> C[アセット埋め込み]
+    C --> D[バンドル作成]
+    D --> E[".app バンドル"]
+```
+
+1. **フロントエンドビルド** -- Tauri が `beforeBuildCommand`（例：`vite build`）を実行し、静的アセットを生成
+2. **Rust コンパイル** -- Cargo がリリースモードで Rust バックエンドをコンパイル
+3. **アセット埋め込み** -- `tauri::generate_context!()` が `frontendDist` の内容をバイナリに埋め込み
+4. **バンドル作成** -- Tauri がすべてを `.app` バンドル（およびオプションで `.dmg`）にパッケージング
+
+## このセクションのトピック
+
+- **[アプリバンドルのビルド](./build-bundle)** -- `cargo tauri build` コマンド、バンドルターゲット、アイコン、インストール
+- **[macOS の落とし穴](./macos-pitfalls)** -- 何時間も無駄にすることになる `.app` 置き換えに関する重大な問題
+- **[Cargo キャッシュ無効化](./cargo-cache)** -- Cargo が変更を検出しない場合にフロントエンドアセットの再埋め込みを強制する方法
+- **[Node.js のバンドル](./node-download)** -- アプリにスタンドアロンの Node.js バイナリを含めるためのダウンロードスクリプト
+
+## クイックリファレンス
+
+```bash
+# Build for production
+cargo tauri build
+
+# Build with a specific config
+cargo tauri build --config tauri.conf.myapp.json
+
+# The output .app bundle is at:
+# target/release/bundle/macos/YourApp.app
+
+# Install to /Applications
+rm -rf /Applications/YourApp.app
+cp -r target/release/bundle/macos/YourApp.app /Applications/
+```
+
+<Warning>
+
+新しいバンドルをコピーする前に、必ず古い `.app` を `rm -rf` で削除すること。`cp -rf` だけでは安全でない理由は [macOS の落とし穴](./macos-pitfalls) を参照。
+
+</Warning>

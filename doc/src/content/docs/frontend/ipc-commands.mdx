@@ -1,0 +1,353 @@
+---
+title: Tauri IPC Command Patterns
+description: Command registration, function signatures, state access, error handling, and async patterns for Tauri v2 IPC.
+sidebar_position: 2
+---
+
+## Command registration
+
+All IPC commands must be registered in the `invoke_handler` macro in `main.rs`. This is the single source of truth for what the frontend can call:
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    // File operations
+    commands::files::messages_list,
+    commands::files::messages_read,
+    commands::files::messages_write,
+    commands::files::messages_delete,
+    commands::files::messages_create,
+    commands::files::draft_read,
+    commands::files::draft_write,
+    commands::files::draft_clear,
+    // Settings
+    commands::settings::settings_get,
+    commands::settings::settings_save,
+    // Workspace
+    commands::workspace::workspace_switch,
+    // Watchers
+    commands::watchers::pins_watch_file,
+    commands::watchers::pins_unwatch_file,
+    // Native dialog
+    native::dialog::open_directory,
+])
+```
+
+<Warning>
+
+If a command is not listed in `generate_handler!`, calling it from the frontend will silently fail. There is no compile-time check that all `#[tauri::command]` functions are registered.
+
+</Warning>
+
+## Command function signatures
+
+### Basic command
+
+The `#[tauri::command]` attribute marks a function as callable from the frontend:
+
+```rust
+#[tauri::command]
+pub fn get_home_dir() -> String {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+```
+
+Frontend call:
+
+```tsx
+const homeDir = await invoke<string>("get_home_dir");
+```
+
+### Command with parameters
+
+Parameters are deserialized from the frontend's argument object:
+
+```rust
+#[tauri::command]
+pub fn messages_read(
+    state: State<'_, Arc<AppState>>,
+    filename: String,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let archives_dir = get_archives_dir(&root);
+    match safe_path(&archives_dir, &filename) {
+        Ok(path) => read_file_or_none(path.to_str()?),
+        Err(_) => None,
+    }
+}
+```
+
+Frontend call:
+
+```tsx
+const content = await invoke<string | null>("messages_read", {
+  filename: "2024-01-15-meeting-notes.md",
+});
+```
+
+<Note>
+
+Parameter names in the Rust function must match the property names in the frontend's argument object. Rust uses `snake_case`; the frontend must also use `snake_case` (not `camelCase`) for the keys.
+
+</Note>
+
+### Command with `State<AppState>`
+
+Access shared application state through the `State` extractor. Note the `Arc` wrapping:
+
+```rust
+#[tauri::command]
+pub fn settings_get(
+    state: State<'_, Arc<AppState>>,
+) -> Option<serde_json::Value> {
+    let root = state
+        .project_root
+        .lock()
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+        .ok()?
+        .clone();
+    if root.is_empty() {
+        return None;
+    }
+    read_settings(&root, &**state)
+}
+```
+
+`State` is injected automatically by Tauri -- the frontend does not pass it:
+
+```tsx
+// State is NOT passed from frontend -- it's injected by Tauri
+const settings = await invoke("settings_get");
+```
+
+The `&**state` pattern dereferences through `State` and `Arc` to get a `&AppState` reference:
+
+```
+state: State<'_, Arc<AppState>>
+  *state  ->  Arc<AppState>     (deref State)
+  **state ->  AppState          (deref Arc)
+  &**state -> &AppState         (borrow)
+```
+
+## Return types and error handling
+
+### Returning `Option<T>`
+
+Use `Option` when the absence of a value is not an error:
+
+```rust
+#[tauri::command]
+pub fn draft_read(
+    state: State<'_, Arc<AppState>>,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let path = get_draft_path(&root);
+    read_file_or_none(&path) // Returns None if file doesn't exist
+}
+```
+
+On the frontend, `Option::None` becomes `null`:
+
+```tsx
+const content = await invoke<string | null>("draft_read");
+if (content === null) {
+  // No draft exists
+}
+```
+
+### Returning `Result<T, String>`
+
+Use `Result` when you need to communicate error details:
+
+```rust
+#[tauri::command]
+pub fn messages_create(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    content: String,
+) -> Result<String, String> {
+    let root = get_project_root_string(&state)?; // ? propagates String error
+    let archives_dir = get_archives_dir(&root);
+
+    fs::create_dir_all(&archives_dir)
+        .map_err(|e| format!("Failed to create archives dir: {}", e))?;
+
+    let filename = generate_filename(&name);
+    let path = safe_path(&archives_dir, &filename)?;
+    fs::write(&path, &content)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(filename)
+}
+```
+
+On the frontend, `Err` rejects the promise:
+
+```tsx
+try {
+  const filename = await invoke<string>("messages_create", {
+    name: "Meeting Notes",
+    content: "# Meeting Notes\n\n...",
+  });
+  console.log("Created:", filename);
+} catch (error) {
+  // error is the String from Err(...)
+  console.error("Failed:", error);
+}
+```
+
+<Warning>
+
+Tauri v2 requires error types to be `String` (or implement `Into<InvokeError>`). You cannot return custom error structs directly. Use `.map_err(|e| format!("...: {}", e))` to convert errors.
+
+</Warning>
+
+### Returning `bool`
+
+For simple success/failure without error details:
+
+```rust
+#[tauri::command]
+pub fn settings_save(
+    state: State<'_, Arc<AppState>>,
+    settings: serde_json::Value,
+) -> bool {
+    let root = match state.project_root.lock() {
+        Ok(r) => r.clone(),
+        Err(_) => return false,
+    };
+    if root.is_empty() {
+        return false;
+    }
+    if !settings.is_object() {
+        return false;
+    }
+    save_settings(&root, &settings, &**state)
+}
+```
+
+### Returning serializable structs
+
+Return complex data by deriving `Serialize`:
+
+```rust
+#[derive(Serialize, Clone, Debug)]
+pub struct DraftDeleteResult {
+    #[serde(rename = "newCount")]
+    pub new_count: u32,
+    #[serde(rename = "newActive")]
+    pub new_active: u32,
+}
+
+#[tauri::command]
+pub fn drafts_delete(
+    state: State<'_, Arc<AppState>>,
+    draft_number: u32,
+) -> Option<DraftDeleteResult> {
+    // ...
+    Some(DraftDeleteResult {
+        new_count,
+        new_active,
+    })
+}
+```
+
+<Tip>
+
+Use `#[serde(rename = "camelCase")]` to convert Rust's `snake_case` field names to the `camelCase` convention expected by JavaScript/TypeScript frontends.
+
+</Tip>
+
+## Async commands
+
+For operations that need the Tauri async runtime (like native dialogs), make the command `async`:
+
+```rust
+#[tauri::command]
+pub async fn open_directory(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|fp| {
+                fp.as_path()
+                    .map(|p| p.to_string_lossy().to_string())
+            })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+```
+
+<Note>
+
+Async commands receive `AppHandle` instead of `State` when they need to own the handle across `.await` points. You can also receive both `State` and `AppHandle` -- extract the data you need from `State` before the first `.await`.
+
+</Note>
+
+## Command module organization
+
+Organize commands by domain in a `commands/` directory:
+
+```
+src/commands/
+  mod.rs          # pub mod declarations
+  files.rs        # CRUD operations for files
+  settings.rs     # Settings read/write
+  watchers.rs     # File watcher management
+  terminal.rs     # PTY/terminal commands
+  workspace.rs    # Workspace switching
+  window.rs       # Window management commands
+  fonts.rs        # Font listing
+```
+
+```rust
+// commands/mod.rs
+pub mod files;
+pub mod fonts;
+pub mod settings;
+pub mod terminal;
+pub mod watchers;
+pub mod window;
+pub mod workspace;
+```
+
+### Internal helper pattern
+
+Extract shared logic into non-command helper functions:
+
+```rust
+// Not a command -- internal helper
+fn get_project_root_string(
+    state: &AppState,
+) -> Result<String, String> {
+    state
+        .project_root
+        .lock()
+        .map(|r| r.clone())
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+}
+
+// Command that uses the helper
+#[tauri::command]
+pub fn draft_read(
+    state: State<'_, Arc<AppState>>,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let path = get_draft_path(&root);
+    read_file_or_none(&path)
+}
+```
+
+This keeps commands thin and focused on parameter handling, while the real logic lives in reusable functions that can be called from multiple commands.
+
+## Key takeaways
+
+1. **Register every command** in `generate_handler!` -- there is no compile-time check
+2. **Use `State<'_, Arc<AppState>>`** -- the `Arc` is needed when sharing state with background threads
+3. **Return `Result<T, String>`** for commands that can fail with details
+4. **Return `Option<T>`** when absence is normal (file not found, empty state)
+5. **Use `.map_err(|e| format!(...))` ** to convert all error types to `String`
+6. **Derive `Serialize` with `serde(rename)`** for frontend-friendly field names
+7. **Keep commands thin** -- delegate to internal helper functions

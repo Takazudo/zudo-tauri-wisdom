@@ -1,0 +1,144 @@
+---
+title: macOS デプロイの落とし穴
+description: 微妙でデバッグが困難な問題を引き起こす macOS 固有のデプロイ上の問題
+sidebar_position: 3
+---
+
+# macOS デプロイの落とし穴
+
+このページでは、Tauri の macOS デプロイにおいて最もフラストレーションの溜まるデバッグ問題を記録する。ビルド後に最新のコード変更が反映されない理由を探して何時間も費やしている場合、ほぼ確実にこれが原因である。
+
+## 最大の落とし穴：cp -rf は .app バンドルに対して壊れている
+
+<Warning>
+
+**既存の `.app` バンドルを上書きするために `cp -rf` を使用してはならない。必ず古い `.app` を削除してからコピーすること。**
+
+```bash
+# 間違い - 内部のバイナリが古いまま残る
+cp -rf target/release/bundle/macos/MyApp.app /Applications/
+
+# 正解 - 先に削除してからコピー
+rm -rf /Applications/MyApp.app
+cp -r target/release/bundle/macos/MyApp.app /Applications/
+```
+
+</Warning>
+
+### なぜこれが起こるのか
+
+`.app` バンドルはディレクトリ構造である。
+
+```
+MyApp.app/
+  Contents/
+    MacOS/
+      MyApp              <-- 実際のバイナリ
+    Resources/
+      ...
+    Info.plist
+```
+
+既存の `.app` の上に新しい `.app` を `cp -rf` すると、macOS の `cp` コマンドは予期しない動作をする。
+
+- 新しいファイルと変更されたファイルを既存のディレクトリにコピーする
+- しかし、**`Contents/MacOS/` 内のバイナリが置き換えられない場合がある**。現在使用中であるか、カーネルにキャッシュされているか、特定のファイルフラグが設定されている場合に発生する
+- その結果、`.app` バンドルは新しく見える（新しい `Info.plist`、新しいリソース）が、**実際の実行ファイルは古いバージョンのまま**となる
+
+古いコードが新しいメタデータと共に実行される状態となり、非常に混乱する動作が発生する。変更が反映されず、ログには正しいバージョンが表示されるのに、動作が間違っているという状況に陥る。
+
+### 正しい手順
+
+常に以下の順序で実行すること。
+
+```bash
+# 1. Kill the running app (if any)
+killall MyApp 2>/dev/null || true
+
+# 2. Wait briefly for process to exit
+sleep 1
+
+# 3. Remove the old bundle completely
+rm -rf /Applications/MyApp.app
+
+# 4. Copy the fresh bundle
+cp -r target/release/bundle/macos/MyApp.app /Applications/
+
+# 5. Clear quarantine
+xattr -cr /Applications/MyApp.app
+```
+
+### バイナリが最新であることの確認
+
+インストール後、バイナリのタイムスタンプがビルドと一致していることを確認する。
+
+```bash
+# Check when the binary was last modified
+stat -f "%Sm" /Applications/MyApp.app/Contents/MacOS/MyApp
+
+# Compare with the source
+stat -f "%Sm" target/release/bundle/macos/MyApp.app/Contents/MacOS/MyApp
+```
+
+両方のタイムスタンプが同一（または数秒以内の差）であるべきである。`/Applications/` のバイナリが古いタイムスタンプを持つ場合、コピーが正しく行われていない。
+
+<Tip>
+
+誤って `cp -rf` を使用しないよう、インストール手順をシェルエイリアスまたはスクリプトにしておくとよい。
+
+```bash
+# ~/.zshrc
+install-tauri() {
+  local app_name="${1:?Usage: install-tauri AppName}"
+  killall "$app_name" 2>/dev/null || true
+  sleep 1
+  rm -rf "/Applications/${app_name}.app"
+  cp -r "target/release/bundle/macos/${app_name}.app" /Applications/
+  xattr -cr "/Applications/${app_name}.app"
+  echo "Installed ${app_name}.app"
+}
+```
+
+</Tip>
+
+## その他の macOS の問題
+
+### App Translocation
+
+macOS は、特定の場所（ダウンロードフォルダなど）から初めて開かれたアプリを「トランスロケート」することがある。トランスロケーションはアプリをランダムな一時ディレクトリにコピーしてそこから実行するため、相対パスが壊れる。
+
+検疫属性を `xattr -cr` でクリアすると、これを防止できる。
+
+```bash
+xattr -cr /Applications/MyApp.app
+```
+
+### Gatekeeper の警告
+
+署名されていないアプリは Gatekeeper の警告を発生させる。開発時には以下の方法で回避できる。
+
+1. アプリを右クリックして「開く」を選択（ダブルクリックではなく）
+2. または拡張属性をクリア：`xattr -cr /Applications/MyApp.app`
+
+配布用には、Apple の開発者プログラムを通じてアプリの署名と公証を行う必要がある。
+
+### バイナリコード署名
+
+開発時であっても、Tauri が作成した `.app` バンドル内のバイナリを作成後に変更すると、コード署名が無効になる。macOS がアプリの実行を拒否したり、「破損している」というエラーを表示することがある。
+
+正しくインストールした後にこの問題が発生した場合は、以下を試すこと。
+
+```bash
+codesign --remove-signature /Applications/MyApp.app
+xattr -cr /Applications/MyApp.app
+```
+
+## まとめチェックリスト
+
+「変更が反映されない」と報告する前に、以下を確認すること。
+
+1. コピー前に古い `.app` を `rm -rf` で削除したか？（`cp -rf` ではない）
+2. 実行中のアプリを `killall` で終了させたか？
+3. ソースとインストール先のバイナリタイムスタンプは一致しているか？
+4. `xattr -cr` で検疫フラグをクリアしたか？
+5. フロントエンドアセットが実際に埋め込まれていることを確認したか？（[Cargo キャッシュ](./cargo-cache)を参照）

@@ -1,0 +1,222 @@
+---
+title: マルチコンフィグによるアプリバリアント
+description: オーバーレイ設定ファイルを使用して、共有コードから複数の Tauri アプリバリアントをビルドする方法
+sidebar_position: 4
+---
+
+# マルチコンフィグによるアプリバリアント
+
+単一の Tauri コードベースから、オーバーレイ設定ファイルを使用して複数のアプリバリアント（異なる名前、識別子、アイコン）を生成できる。ベースの `tauri.conf.json` に完全な設定を記述し、バリアント設定は異なるフィールドのみをオーバーライドする。
+
+## 問題
+
+「zudotext」というテキストエディタアプリがある。ここで「ztoffice」という2つ目のアプリを以下の条件で作成したいとする。
+
+- 異なる名前とアイコン
+- 異なる macOS バンドル識別子
+- 同じ Rust コードとフロントエンド
+
+プロジェクト全体をコピーすることもできるが、それはすべてを2重にメンテナンスすることを意味する。代わりに、設定のオーバーレイを使用する。
+
+## 設定オーバーレイの仕組み
+
+Tauri の `--config` フラグは、ベースの `tauri.conf.json` の**上にマージされる**追加の JSON ファイルを受け付ける。オーバーレイにはオーバーライドしたいフィールドのみを含めればよい。
+
+```bash
+# Build the base app
+cargo tauri build
+
+# Build the variant app
+cargo tauri build --config tauri.conf.ztoffice.json
+```
+
+## 実際の例
+
+### ベース設定：tauri.conf.json
+
+すべてのフィールドを含む完全な設定。
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "zudotext",
+  "version": "0.1.0",
+  "identifier": "com.takazudo.zudotext",
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config vite.config.ts",
+    "beforeBuildCommand": "pnpm exec vite build --config vite.config.ts",
+    "devUrl": "http://localhost:37461",
+    "frontendDist": "./dist-renderer"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### バリアント設定：tauri.conf.ztoffice.json
+
+異なるフィールドのみを記述する。
+
+```json
+{
+  "productName": "ztoffice",
+  "identifier": "com.takazudo.ztoffice"
+}
+```
+
+ファイルはこれだけである -- たった2つのフィールド。`cargo tauri build --config tauri.conf.ztoffice.json` を実行すると、Tauri は以下の処理を行う。
+
+1. ベースの `tauri.conf.json` を読み込む
+2. `tauri.conf.ztoffice.json` をディープマージする
+3. `productName: "ztoffice"` と `identifier: "com.takazudo.ztoffice"` でビルド
+4. その他すべて（ビルドコマンド、バンドル設定など）はベースから取得
+
+出力は以下のようになる。
+
+```
+target/release/bundle/macos/ztoffice.app
+```
+
+## オーバーライド可能なフィールド
+
+`tauri.conf.json` の任意のフィールドをバリアント設定でオーバーライドできる。一般的なオーバーライドは以下の通りである。
+
+| フィールド | 用途 |
+|-------|---------|
+| `productName` | アプリ名（タイトルバー、Dock に表示） |
+| `identifier` | macOS バンドル識別子（アプリごとに一意である必要がある） |
+| `bundle.icon` | アプリアイコン |
+| `build.beforeDevCommand` | バリアント用の異なる開発コマンド |
+| `build.frontendDist` | 異なるフロントエンドアセット |
+
+## バリアントごとのワークスペース解決
+
+マルチコンフィグパターンは、Rust コードがアプリ名に基づいて動作を適応させる場合に特に強力になる。[テキストエディタアプリ](./text-editor-app)のプロジェクトルート解決を考えてみよう。
+
+```rust
+// In production, derive app name from the .app bundle path
+// /Applications/ztoffice.app/Contents/MacOS/zudotext
+//              ^^^^^^^^^^ this is the app_name
+let app_name = std::env::current_exe()
+    .ok()
+    .and_then(|exe| {
+        exe.ancestors()
+            .find(|p| p.extension().map(|ext| ext == "app").unwrap_or(false))
+            .and_then(|app_dir| {
+                app_dir.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+            })
+    })
+    .unwrap_or_else(|| "default".to_string());
+```
+
+これにより、以下のようになる。
+
+- `zudotext.app` はワークスペースとして `~/Documents/zudo-text/zudotext/` を使用
+- `ztoffice.app` はワークスペースとして `~/Documents/zudo-text/ztoffice/` を使用
+
+各バリアントは独自の分離されたワークスペースを持ち、以下のように設定される。
+
+```
+~/.config/zudotext/
+  zudotext/
+    config.json    # ベースアプリ用ワークスペース
+  ztoffice/
+    config.json    # バリアント用ワークスペース
+```
+
+<Tip>
+
+設定ディレクトリはバイナリ名（`zudotext`）を使用し、サブディレクトリはアプリバンドル名を使用することに注意。これは、同じバイナリのすべてのバリアントが設定の名前空間を共有することを意味しており、意図的な設計である -- これらは同じアプリのバリアントだからである。
+
+</Tip>
+
+## ビルドスクリプト
+
+利便性のため、各バリアント用のビルドスクリプトを作成する。
+
+```bash
+#!/bin/bash
+# scripts/build-zudotext.sh
+set -e
+cargo clean -p zudotext
+cargo tauri build
+killall zudotext 2>/dev/null || true
+sleep 1
+rm -rf /Applications/zudotext.app
+cp -r target/release/bundle/macos/zudotext.app /Applications/
+xattr -cr /Applications/zudotext.app
+echo "Installed zudotext.app"
+```
+
+```bash
+#!/bin/bash
+# scripts/build-ztoffice.sh
+set -e
+cargo clean -p zudotext
+cargo tauri build --config tauri.conf.ztoffice.json
+killall ztoffice 2>/dev/null || true
+sleep 1
+rm -rf /Applications/ztoffice.app
+cp -r target/release/bundle/macos/ztoffice.app /Applications/
+xattr -cr /Applications/ztoffice.app
+echo "Installed ztoffice.app"
+```
+
+<Note>
+
+両方のスクリプトで `cargo clean -p zudotext`（プロダクト名ではなくクレート名）を使用していることに注意。クレート名はバリアント間で変更されない -- 変わるのはプロダクト名のみである。
+
+</Note>
+
+## バリアントの開発モード
+
+開発時にも `--config` を使用できる。
+
+```bash
+cargo tauri dev --config tauri.conf.ztoffice.json
+```
+
+これにより、オーバーライドされたプロダクト名と識別子でバリアントが開発モードで実行される。
+
+## バリアント固有のフロントエンド設定
+
+バリアントごとに異なるフロントエンドの動作が必要な場合、設定からフロントエンドに情報を渡すことができる。1つのアプローチは Vite の環境変数を使用することである。
+
+```bash
+# In tauri.conf.ztoffice.json
+{
+  "productName": "ztoffice",
+  "identifier": "com.takazudo.ztoffice",
+  "build": {
+    "beforeBuildCommand": "VITE_APP_VARIANT=ztoffice pnpm exec vite build --config vite.config.ts"
+  }
+}
+```
+
+フロントエンド側では以下のように参照する。
+
+```typescript
+const appVariant = import.meta.env.VITE_APP_VARIANT || 'zudotext';
+```
+
+あるいは、Rust コードが IPC コマンドを通じてアプリ名を公開し、フロントエンドが起動時にクエリする方法もある。
+
+## 制限事項
+
+- **同じ Rust バイナリ** -- すべてのバリアントは同じ Rust バイナリにコンパイルされる。設定だけではバリアント固有の Rust コードを持つことはできない（それにはフィーチャーフラグを使用する）
+- **同じバンドルリソース** -- `bundle.icon` や `frontendDist` をオーバーライドしない限り、すべてのバリアントは同じリソースを共有する
+- **同じ Cargo.toml** -- `Cargo.toml` のクレート名は変更されず、変わるのは Tauri のプロダクト名のみである

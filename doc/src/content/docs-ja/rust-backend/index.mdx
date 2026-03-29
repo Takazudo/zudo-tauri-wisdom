@@ -1,0 +1,60 @@
+---
+title: Rust バックエンドパターン
+description: 堅牢なデスクトップアプリケーションを構築するための Tauri v2 Rust バックエンドパターンの概要。
+sidebar_position: 1
+---
+
+このセクションでは、Tauri v2 アプリケーション向けの実戦で検証済みの Rust バックエンドパターンを扱う。これらのパターンはフレームワーク固有の理論ではなく、実際のプロダクションアプリから生まれたものであり、実際に遭遇する問題に対処するものである。
+
+## ここで扱う内容
+
+### Mutex の安全性
+
+Tauri コマンドは `State<AppState>` を通じて共有状態を受け取る。この状態は通常 `Mutex` で保護されており、誤った使い方をするとアプリケーションがクラッシュする。[Mutex の安全性](/rust-backend/mutex-safety/)ページでそのルールを解説する。
+
+### 外部編集検知付き設定キャッシュ
+
+すべての IPC 呼び出しでディスクから設定を読み込むのは無駄であるが、単純なキャッシュではユーザー（または別のアプリケーション）が外部でファイルを編集した場合に正しく動作しない。[設定キャッシュ](/rust-backend/settings-cache/)ページでは、mtime ベースのキャッシュ無効化戦略を示す。
+
+### デバウンス付きファイルウォッチャー
+
+ファイルシステムウォッチャーは高速かつ重複してイベントを発火する。[ファイルウォッチャー](/rust-backend/file-watchers/)ページでは、汎用的なデバウンス付き監視ループ、バックグラウンドスレッドの `Send` 安全性パターン、アプリの書き込みと外部変更を区別するための書き込みマーカーを扱う。
+
+### メニューイベントハンドラー
+
+`on_menu_event` はメインスレッドで実行される。ブロックするとアプリケーション全体がフリーズする。[メニューイベント](/rust-backend/menu-events/)ページでは、メニューハンドラーからバックグラウンド処理を生成する正しいパターンを示す。
+
+### ウィンドウ管理
+
+プログラムによるウィンドウ生成により、スプラッシュスクリーン、開発サーバーのポーリング、プラットフォーム固有の動作を制御できる。[ウィンドウ管理](/rust-backend/window-management/)ページでは、ウィンドウのライフサイクル全体を扱う。
+
+## 一般的なアーキテクチャ
+
+典型的な Tauri v2 Rust バックエンドは以下の構造に従う：
+
+```
+src/
+  main.rs          # Builder setup, invoke_handler, setup()
+  state.rs         # AppState definition (Mutex-wrapped fields)
+  commands/
+    mod.rs         # Module declarations
+    files.rs       # File operation commands
+    settings.rs    # Settings read/write with cache
+    watchers.rs    # File watcher management
+    terminal.rs    # PTY/process commands
+    workspace.rs   # Workspace switching
+  native/
+    mod.rs         # Module declarations
+    menu.rs        # Menu creation and event handlers
+    window.rs      # Window creation and lifecycle
+    dialog.rs      # Native dialogs
+  helpers/
+    ...            # Utility functions
+```
+
+主要なアーキテクチャ上の判断：
+
+1. **単一の `AppState` 構造体** -- すべての共有状態を `Mutex` フィールドの背後に配置
+2. **Arc ラッピング** -- `AppState` を `Arc` でラップすることで、Tauri ランタイムとバックグラウンドスレッド（例：HTTP サーバー）間で共有可能にする
+3. **専用モジュールのコマンド** -- 各コマンドモジュールは一つのドメインに集中する
+4. **プラットフォーム固有のコード** は `#[cfg(target_os = "macos")]` ガードの背後に配置

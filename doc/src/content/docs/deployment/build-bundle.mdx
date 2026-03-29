@@ -1,0 +1,164 @@
+---
+title: Building App Bundles
+description: Building .app bundles with cargo tauri build, configuring targets, icons, and installation
+sidebar_position: 2
+---
+
+# Building App Bundles
+
+The `cargo tauri build` command compiles your Rust backend, bundles the frontend assets, and produces a distributable `.app` bundle for macOS.
+
+## Basic Build
+
+```bash
+cargo tauri build
+```
+
+This runs the full pipeline:
+
+1. Executes `beforeBuildCommand` from `tauri.conf.json` (your frontend build)
+2. Compiles the Rust code in release mode
+3. Embeds the `frontendDist` directory into the binary
+4. Creates the `.app` bundle
+
+The output is located at:
+
+```
+target/release/bundle/macos/YourApp.app
+```
+
+## Bundle Configuration
+
+Configure the bundle in `tauri.conf.json`:
+
+```json
+{
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### Bundle Targets
+
+The `targets` field controls which bundle formats are created:
+
+| Value | Output |
+|-------|--------|
+| `"all"` | All available formats (`.app`, `.dmg`) |
+| `["app"]` | Only the `.app` bundle |
+| `["dmg"]` | Only the `.dmg` disk image |
+
+For development iteration, building only the `.app` is faster since it skips `.dmg` creation.
+
+### Category
+
+The `category` field sets the macOS application category, which appears in Finder and the App Store. Common values:
+
+- `"DeveloperTool"` -- for developer utilities
+- `"Productivity"` -- for productivity apps
+- `"Utility"` -- for general utilities
+
+### Minimum System Version
+
+```json
+{
+  "macOS": {
+    "minimumSystemVersion": "10.15"
+  }
+}
+```
+
+Set this to the oldest macOS version you want to support. `10.15` (Catalina) is a reasonable minimum for most apps. Setting it lower may cause compatibility issues with newer APIs.
+
+## Icon Configuration
+
+Tauri looks for icons specified in the `bundle.icon` array:
+
+```json
+{
+  "bundle": {
+    "icon": ["icons/icon.png"]
+  }
+}
+```
+
+If the array is empty or omitted, Tauri uses a default icon. For production apps, provide at least one high-resolution PNG (1024x1024 is recommended). Tauri automatically generates the required `.icns` file from it.
+
+<Tip>
+
+The icon path is relative to `tauri.conf.json`. Keep your icon source file in a dedicated `icons/` directory next to the config.
+
+</Tip>
+
+## Installing to /Applications
+
+After building, install the `.app` bundle to `/Applications`:
+
+```bash
+# IMPORTANT: Remove old version first (see macOS Pitfalls)
+rm -rf /Applications/YourApp.app
+
+# Copy the new bundle
+cp -r target/release/bundle/macos/YourApp.app /Applications/
+
+# Clear quarantine flag (app is not signed)
+xattr -cr /Applications/YourApp.app
+```
+
+### Clearing Quarantine
+
+macOS marks downloaded and copied applications with a quarantine flag. For unsigned apps (typical during development), you need to clear this:
+
+```bash
+xattr -cr /Applications/YourApp.app
+```
+
+The `-c` flag clears all extended attributes and `-r` applies recursively. Without this, macOS may refuse to open the app or show a "damaged" warning.
+
+<Note>
+
+The quarantine flag is re-applied every time you copy the `.app` bundle. You need to run `xattr -cr` after each fresh install.
+
+</Note>
+
+### Kill Before Replace
+
+If the app is currently running, kill it before replacing:
+
+```bash
+killall YourApp 2>/dev/null || true
+rm -rf /Applications/YourApp.app
+cp -r target/release/bundle/macos/YourApp.app /Applications/
+xattr -cr /Applications/YourApp.app
+```
+
+## Building with Alternative Configs
+
+To build with a different `tauri.conf.json` file:
+
+```bash
+cargo tauri build --config tauri.conf.ztoffice.json
+```
+
+The alternative config is merged on top of the base config, so it only needs to contain the fields that differ. See [Multi-Config](../recipes/multi-config) for details.
+
+## Build Verification
+
+After building, verify the binary is fresh:
+
+```bash
+# Check the binary modification time
+stat -f "%Sm" target/release/bundle/macos/YourApp.app/Contents/MacOS/YourApp
+
+# Verify frontend assets are embedded (if applicable)
+# Search for a known string in the built JS
+grep -l "some-unique-string" target/release/bundle/macos/YourApp.app/Contents/Resources/*
+```
+
+If the timestamp is old or the expected string is missing, see [Cargo Cache Invalidation](./cargo-cache).

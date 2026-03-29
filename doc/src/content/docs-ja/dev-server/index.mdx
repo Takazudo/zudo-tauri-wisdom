@@ -1,0 +1,67 @@
+---
+title: 開発サーバー連携
+description: 開発時に Tauri がフロントエンド開発サーバーとどのように接続するか
+sidebar_position: 1
+---
+
+# 開発サーバー連携
+
+開発時、Tauri はバンドルされた静的ファイルではなく、ローカルの開発サーバーからフロントエンドを読み込む。これは Tauri の開発体験の根幹をなす仕組みであり、ホットリロード、高速なイテレーション、そして使い慣れたブラウザの DevTools をそのまま利用できる。
+
+## 仕組み
+
+Tauri の開発ワークフローは、`tauri.conf.json` 内の2つの設定フィールドに依存している。
+
+- **`beforeDevCommand`** -- Rust バックエンドを起動する前に Tauri が実行するシェルコマンド（通常は開発サーバーの起動コマンド）
+- **`devUrl`** -- 開発時に Tauri の WebView が読み込む URL
+
+```json
+{
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config vite.config.ts",
+    "devUrl": "http://localhost:37461"
+  }
+}
+```
+
+`cargo tauri dev` を実行すると、Tauri は以下の手順で動作する。
+
+1. `beforeDevCommand` をサブプロセスとして実行
+2. 開発サーバーが利用可能になるまで待機
+3. Rust バックエンドを起動
+4. `devUrl` を指す WebView ウィンドウを開く
+
+## このセクションのトピック
+
+このセクションでは、開発サーバー連携に関する実践的なパターンと注意点を取り上げる。
+
+- **[Vite 連携](./vite-integration)** -- Vite をフロントエンド開発サーバーとして設定する方法。CWD に関する注意点やマルチコンフィグ構成を含む
+- **[SSE ライブリロード](./sse-live-reload)** -- HMR ではなくフルリビルドを行う開発サーバー向けの、SSE ベースのカスタムライブリロードシステムの構築
+- **[ウォッチャーループ](./watcher-loops)** -- ビルド出力が監視対象ディレクトリに書き込まれる際の無限リビルドループの防止
+
+## 開発モードと本番モードの違い
+
+主なアーキテクチャ上の違いは以下の通りである。
+
+| 観点 | 開発モード | 本番モード |
+|--------|------------|------------|
+| フロントエンドのソース | 開発サーバー (`devUrl`) | バンドルされたファイル (`frontendDist`) |
+| リロードの挙動 | HMR またはライブリロード | 静的 |
+| Rust の設定 | `cfg!(debug_assertions)` が `true` | `cfg!(debug_assertions)` が `false` |
+| ビルドコマンド | `beforeDevCommand` | `beforeBuildCommand` |
+
+<Tip>
+
+Rust コードで開発モードを検出するには `cfg!(debug_assertions)` を使用する。これはコンパイル時定数であるため、不要なブランチは完全に除去され、ランタイムコストは一切発生しない。
+
+</Tip>
+
+```rust
+const IS_DEV: bool = cfg!(debug_assertions);
+
+if IS_DEV {
+    // Dev server is already running via beforeDevCommand
+} else {
+    // Production: spawn your own server or use bundled assets
+}
+```

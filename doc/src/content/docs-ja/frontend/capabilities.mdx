@@ -1,0 +1,226 @@
+---
+title: 権限と Capabilities
+description: プラグインやリモート URL を含め、フロントエンドがアクセスできる内容を制御する Tauri v2 Capabilities の設定。
+sidebar_position: 4
+---
+
+## Capabilities とは何か
+
+Tauri v2 はフロントエンド（WebView）が何を許可されているかを制御する **Capabilities** システムを使用する。すべての IPC コマンドがデフォルトでアクセス可能だった Tauri v1 とは異なり、Tauri v2 は明示的な権限付与を必要とする。
+
+Capabilities は Tauri プロジェクトの `capabilities/` ディレクトリ下の JSON ファイルで定義する。
+
+## デフォルトの Capability ファイル
+
+典型的な `capabilities/default.json`：
+
+```json
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*/**"]
+  },
+  "permissions": ["core:default", "dialog:default", "shell:default"]
+}
+```
+
+### `identifier`
+
+この Capability セットの一意な名前。異なるセキュリティコンテキスト用に複数の Capability ファイルを持つことができる。
+
+### `windows`
+
+この Capability が適用されるウィンドウ。`["main"]` は、ラベルが `"main"` のウィンドウのみがこれらの権限を取得することを意味する。追加のウィンドウ（例：設定、About）を作成する場合、そのラベルをここに含めるか、別の Capability ファイルを作成する必要がある。
+
+### `remote`
+
+どのリモート URL が Tauri IPC ブリッジにアクセスできるかを制御する。開発時には特に重要である：
+
+```json
+"remote": {
+  "urls": ["http://localhost:*/**"]
+}
+```
+
+これにより、任意の localhost URL（任意のポート、任意のパス）が Tauri コマンドを invoke できる。これがなければ、Vite 開発サーバーは Rust バックエンドと通信できない。
+
+<Note>
+
+本番環境ではフロントエンドは `tauri://` URL から読み込まれ、常に IPC アクセスが可能である。`remote` セクションは主にローカル開発サーバーとの開発用である。
+
+</Note>
+
+### `permissions`
+
+フロントエンドに付与される権限のリスト。各権限は特定のプラグインまたはコア機能にスコープされている。
+
+## コア権限
+
+### `core:default`
+
+基本的な Tauri 機能を有効にするベースライン権限である：
+
+- IPC コマンド呼び出し（`generate_handler!` に登録されたコマンド用）
+- イベントシステム（`emit`、`listen`）
+- ウィンドウ管理の基本機能
+
+`core:default` がなければ、フロントエンドは Tauri コマンドを一切呼び出せない。
+
+## プラグイン権限
+
+各 Tauri プラグインは独自の権限スコープを定義する。明示的に付与する必要がある。
+
+### `dialog:default`
+
+ネイティブダイアログ API（ファイルピッカー、フォルダピッカー、メッセージボックス）を有効にする：
+
+```rust
+// Rust side: requires dialog plugin
+app.dialog().file().blocking_pick_folder()
+```
+
+```tsx
+// Frontend side: requires dialog:default permission
+import { open } from "@tauri-apps/plugin-dialog";
+const selected = await open({ directory: true });
+```
+
+プラグインの登録が必要：
+
+```rust
+tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+```
+
+### `shell:default`
+
+デフォルトブラウザで URL を開くなどのシェル操作を有効にする：
+
+```rust
+// Rust side: requires shell plugin
+tauri::Builder::default()
+    .plugin(tauri_plugin_shell::init())
+```
+
+```tsx
+// Frontend side: requires shell:default permission
+import { open } from "@tauri-apps/plugin-shell";
+await open("https://example.com");
+```
+
+<Warning>
+
+`shell:default` 権限は、フロントエンドが URL を開いたりシェルコマンドを実行したりすることを許可する。セキュリティに敏感なアプリケーションでは、`default` の代わりにより制限的なシェル権限の使用を検討する。
+
+</Warning>
+
+## 新しい権限の追加
+
+新しい Tauri プラグインを追加する際は、以下を行う必要がある：
+
+1. `Cargo.toml` にプラグインを追加する
+2. `main.rs` で `.plugin()` を使って登録する
+3. `capabilities/default.json` にプラグインの権限を追加する
+
+例えば、クリップボードプラグインを追加する場合：
+
+```json
+{
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "shell:default",
+    "clipboard-manager:default"
+  ]
+}
+```
+
+<Info>
+
+プラグインを追加しても権限の追加を忘れた場合、そのプラグインの API へのフロントエンド呼び出しはサイレントに失敗するか、ランタイムで権限エラーをスローする。コンパイル時チェックは存在しない。
+
+</Info>
+
+## セキュリティ：CSP 設定
+
+Tauri v2 は WebView が読み込めるものを制限するための Content Security Policy (CSP) ヘッダーをサポートする。`tauri.conf.json` 内で設定する：
+
+```json
+{
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'"
+    }
+  }
+}
+```
+
+CSP を `null` に設定するとすべての CSP 制限が無効になる：
+
+```json
+{
+  "app": {
+    "security": {
+      "csp": null
+    }
+  }
+}
+```
+
+<Warning>
+
+`"csp": null` を設定すると Content Security Policy が完全に無効になる。これは WebView があらゆるオリジンからスクリプト、スタイル、リソースを読み込めることを意味する。セキュリティ上の影響を理解しており、アプリが機密データを扱わない場合にのみ行う。
+
+</Warning>
+
+開発時には、Vite 開発サーバーがホットリロードスクリプトを注入するため、緩和された CSP が必要になることが多い。本番環境では、厳格な CSP を設定すべきである。
+
+## 複数の Capability ファイル
+
+異なるセキュリティコンテキスト用に別々の Capability ファイルを作成できる：
+
+```
+capabilities/
+  default.json      # Main window permissions
+  settings.json     # Settings window (restricted)
+```
+
+```json
+// capabilities/settings.json
+{
+  "identifier": "settings",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}
+```
+
+これにより設定ウィンドウにはコア権限のみが付与され、ダイアログ、シェル、その他のプラグインへのアクセスは与えられない。
+
+## トラブルシューティング
+
+### 「IPC call failed」または「Permission denied」
+
+- コマンドが `generate_handler!` に記載されているか確認する
+- `core:default` が権限リストに含まれているか確認する
+- ウィンドウラベルが Capability ファイルの `windows` 配列と一致しているか確認する
+
+### 「Plugin not found」または「Feature not available」
+
+- `main.rs` で `.plugin()` によりプラグインが登録されているか確認する
+- プラグインの権限が `capabilities/default.json` に含まれているか確認する
+- フロントエンド API 用にプラグインの npm パッケージがインストールされているか確認する
+
+### 開発サーバーが Tauri コマンドを呼び出せない
+
+- `remote.urls` 配列に開発サーバーの URL パターンが含まれているか確認する
+- パターン `"http://localhost:*/**"` は localhost の任意のポートをカバーする
+
+## 重要なポイント
+
+1. **`core:default` は必須** -- これがなければ IPC コマンドは一切動作しない
+2. **各プラグインには独自の権限が必要** -- `dialog:default`、`shell:default` など
+3. **リモート URL は明示的な許可リストが必要** -- 開発サーバーの IPC アクセスに必要
+4. **ウィンドウラベルが一致する必要がある** -- Capability の `windows` 配列にウィンドウラベルが含まれていなければならない
+5. **コンパイル時チェックは存在しない** -- 権限の欠落はサイレントに失敗するかランタイムで失敗する
+6. **本番環境では厳格な CSP を使用する** -- 開発環境以外では `"csp": null` を避ける

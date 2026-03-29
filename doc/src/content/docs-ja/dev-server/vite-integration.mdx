@@ -1,0 +1,245 @@
+---
+title: Vite 連携
+description: Tauri のフロントエンド開発サーバーおよびビルドツールとして Vite を設定する方法
+sidebar_position: 2
+---
+
+# Vite 連携
+
+Vite は Tauri アプリで最も一般的に使用されるフロントエンドツールである。開発時には HMR を提供し、本番環境では最適化されたバンドルを生成する。連携はすべて `tauri.conf.json` を通じて設定する。
+
+## 設定フィールド
+
+`tauri.conf.json` の4つのフィールドが Vite 連携を制御する。
+
+```json
+{
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config vite.config.ts",
+    "beforeBuildCommand": "pnpm exec vite build --config vite.config.ts",
+    "devUrl": "http://localhost:37461",
+    "frontendDist": "./dist-renderer"
+  }
+}
+```
+
+### beforeDevCommand
+
+開発モード（`cargo tauri dev`）で Rust バックエンドを起動する前に Tauri が実行するコマンド。Vite の場合、これは Vite 開発サーバーを起動する。
+
+```json
+"beforeDevCommand": "pnpm exec vite --config vite.config.ts"
+```
+
+### beforeBuildCommand
+
+本番アプリのビルド（`cargo tauri build`）前に Tauri が実行するコマンド。Vite の場合、これは本番ビルドを実行する。
+
+```json
+"beforeBuildCommand": "pnpm exec vite build --config vite.config.ts"
+```
+
+### devUrl
+
+開発時に Tauri の WebView が読み込む URL。Vite がリッスンしているポートと一致させる必要がある。
+
+```json
+"devUrl": "http://localhost:37461"
+```
+
+### frontendDist
+
+本番用にビルドされたフロントエンドアセットが格納されるディレクトリ。これは Vite のビルド出力ディレクトリである。パスは `tauri.conf.json` ファイルからの相対パスで指定する。
+
+```json
+"frontendDist": "./dist-renderer"
+```
+
+## 重要：beforeDevCommand の CWD
+
+<Warning>
+
+**`beforeDevCommand` は、`tauri.conf.json` が配置されているディレクトリではなく、リポジトリのルートを作業ディレクトリとして実行される。**
+
+これは Tauri の開発サーバー連携において最も混乱しやすい点である。`tauri.conf.json` が `tauri-app/` にあり、`vite.config.ts` も `tauri-app/` にある場合、`beforeDevCommand` が `tauri-app/` から実行されると思うかもしれないが、そうではない。リポジトリのルートから実行される。
+
+</Warning>
+
+つまり、プロジェクト構造が以下のような場合、
+
+```
+my-app/                    <-- beforeDevCommand はここで実行される
+  tauri-app/
+    tauri.conf.json
+    vite.config.ts
+    src/
+    dist-renderer/
+```
+
+`beforeDevCommand` はこの点を考慮する必要がある。2つのアプローチがある。
+
+### アプローチ1：コマンド内で `cd` を使用
+
+開発コマンドを異なるディレクトリから実行する必要があるアプリの場合。
+
+```json
+{
+  "build": {
+    "beforeDevCommand": "cd ../../doc && pnpm dev",
+    "devUrl": "http://localhost:32342/"
+  }
+}
+```
+
+このパターンは、Tauri アプリがモノレポ内の別の場所にある開発サーバーをラップする場合に一般的である。例えば、Tauri アプリがドキュメントサイトをラップする実際の本番設定は以下のようになる。
+
+```json
+{
+  "productName": "zmod doc",
+  "build": {
+    "frontendDist": "./frontend",
+    "beforeDevCommand": "cd ../../doc && pnpm dev",
+    "devUrl": "http://localhost:32342/"
+  }
+}
+```
+
+プレビューサーバーをラップする別の例。
+
+```json
+{
+  "productName": "zmdpreview",
+  "build": {
+    "frontendDist": "./frontend",
+    "beforeDevCommand": "cd ../../sub-packages/zmdpreview && pnpm dev",
+    "devUrl": "http://localhost:14188/"
+  }
+}
+```
+
+### アプローチ2：設定ファイルのパスを指定
+
+Vite が `tauri.conf.json` と同じディレクトリにある場合、`--config` フラグを使用してフルパスを指定する。
+
+```json
+{
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config vite.config.ts",
+    "beforeBuildCommand": "pnpm exec vite build --config vite.config.ts",
+    "devUrl": "http://localhost:37461",
+    "frontendDist": "./dist-renderer"
+  }
+}
+```
+
+<Note>
+
+`--config` フラグで相対パスを使用できるのは、`pnpm exec` がシェルの CWD ではなく、パッケージのルートからパスを解決するためである。`npx` を使用する場合や `vite` を直接呼び出す場合は、パスの調整が必要になることがある。
+
+</Note>
+
+## 本番環境での frontendDist
+
+`frontendDist` のパスは `tauri.conf.json` ファイルからの相対パスである（`beforeDevCommand` とは異なる）。Tauri はビルド時に `tauri::generate_context!()` を使用してこれらのファイルをバイナリに埋め込む。
+
+```
+tauri-app/
+  tauri.conf.json         <-- frontendDist はこのファイルからの相対パス
+  dist-renderer/          <-- "./dist-renderer"
+    index.html
+    assets/
+      main-abc123.js
+      style-def456.css
+```
+
+フロントエンドアセットをバンドルしないアプリ（独自のサーバーを起動するため）の場合、`frontendDist` はローディングページのみを含む最小限のディレクトリを指す。
+
+```json
+{
+  "build": {
+    "frontendDist": "./frontend"
+  }
+}
+```
+
+```
+tauri-app/
+  frontend/
+    index.html            <-- シンプルなローディング/スプラッシュページ
+```
+
+## 複数の Vite 設定ファイル
+
+シナリオに応じて異なる Vite 設定が必要な場合がある。
+
+```
+tauri-app/
+  vite.config.ts              <-- メイン設定
+  vite.config.ztoffice.ts     <-- バリアント設定
+```
+
+`tauri.conf.json` で特定の設定ファイルを参照する。
+
+```json
+"beforeDevCommand": "pnpm exec vite --config vite.config.ts"
+```
+
+またはバリアントの場合：
+
+```json
+"beforeDevCommand": "pnpm exec vite --config vite.config.ztoffice.ts"
+```
+
+これは、同じコードベースから複数のアプリバリアントをビルドする場合に有用である（完全なパターンについては[マルチコンフィグ](../recipes/multi-config)を参照）。
+
+## よくある落とし穴
+
+### ポートの競合
+
+`vite.config.ts` で Vite のポートをハードコードし、`devUrl` と一致させること。Vite にランダムなポートを選択させると、WebView が接続できなくなる。
+
+```typescript
+// vite.config.ts
+export default defineConfig({
+  server: {
+    port: 37461,
+    strictPort: true, // Fail if port is taken, don't auto-increment
+  },
+});
+```
+
+<Tip>
+
+Vite の設定には必ず `strictPort: true` を設定すること。これがないと、ポート37461が使用中の場合、Vite は無言で37462を使用し、Tauri の WebView は37461に接続しようとし続けて白い画面が表示される。
+
+</Tip>
+
+### CSP の設定
+
+Tauri のデフォルトの Content Security Policy (CSP) は `localhost` への接続をブロックする。Vite の HMR WebSocket が動作するには、開発時に CSP を緩和または無効化する必要がある。
+
+```json
+{
+  "app": {
+    "security": {
+      "csp": null
+    }
+  }
+}
+```
+
+`csp` を `null` に設定すると CSP が完全に無効化される。開発時はこれで問題ないが、アプリが機密データを扱う場合は、本番環境では適切な CSP を設定すべきである。
+
+### 空の windows 配列
+
+Rust でプログラム的にウィンドウを作成する場合（スプラッシュスクリーンやカスタムウィンドウの動作を持つアプリでは一般的）、`windows` 配列を空にする。
+
+```json
+{
+  "app": {
+    "windows": []
+  }
+}
+```
+
+これは Tauri にウィンドウを自動作成しないよう指示する。ウィンドウの作成は Rust コードが担当する。

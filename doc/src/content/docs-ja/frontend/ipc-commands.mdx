@@ -1,0 +1,353 @@
+---
+title: Tauri IPC コマンドパターン
+description: Tauri v2 IPC のコマンド登録、関数シグネチャ、State アクセス、エラーハンドリング、非同期パターン。
+sidebar_position: 2
+---
+
+## コマンド登録
+
+すべての IPC コマンドは `main.rs` の `invoke_handler` マクロに登録する必要がある。これがフロントエンドが呼び出せるものの唯一の情報源である：
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    // File operations
+    commands::files::messages_list,
+    commands::files::messages_read,
+    commands::files::messages_write,
+    commands::files::messages_delete,
+    commands::files::messages_create,
+    commands::files::draft_read,
+    commands::files::draft_write,
+    commands::files::draft_clear,
+    // Settings
+    commands::settings::settings_get,
+    commands::settings::settings_save,
+    // Workspace
+    commands::workspace::workspace_switch,
+    // Watchers
+    commands::watchers::pins_watch_file,
+    commands::watchers::pins_unwatch_file,
+    // Native dialog
+    native::dialog::open_directory,
+])
+```
+
+<Warning>
+
+`generate_handler!` に記載されていないコマンドは、フロントエンドから呼び出してもサイレントに失敗する。すべての `#[tauri::command]` 関数が登録されているかどうかのコンパイル時チェックは存在しない。
+
+</Warning>
+
+## コマンドの関数シグネチャ
+
+### 基本的なコマンド
+
+`#[tauri::command]` 属性は、フロントエンドから呼び出し可能な関数としてマークする：
+
+```rust
+#[tauri::command]
+pub fn get_home_dir() -> String {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+```
+
+フロントエンドからの呼び出し：
+
+```tsx
+const homeDir = await invoke<string>("get_home_dir");
+```
+
+### パラメータ付きコマンド
+
+パラメータはフロントエンドの引数オブジェクトからデシリアライズされる：
+
+```rust
+#[tauri::command]
+pub fn messages_read(
+    state: State<'_, Arc<AppState>>,
+    filename: String,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let archives_dir = get_archives_dir(&root);
+    match safe_path(&archives_dir, &filename) {
+        Ok(path) => read_file_or_none(path.to_str()?),
+        Err(_) => None,
+    }
+}
+```
+
+フロントエンドからの呼び出し：
+
+```tsx
+const content = await invoke<string | null>("messages_read", {
+  filename: "2024-01-15-meeting-notes.md",
+});
+```
+
+<Note>
+
+Rust 関数のパラメータ名は、フロントエンドの引数オブジェクトのプロパティ名と一致する必要がある。Rust は `snake_case` を使用し、フロントエンドも（`camelCase` ではなく）`snake_case` をキーに使用する必要がある。
+
+</Note>
+
+### `State<AppState>` 付きコマンド
+
+`State` エクストラクタを通じて共有アプリケーション状態にアクセスする。`Arc` ラッピングに注意：
+
+```rust
+#[tauri::command]
+pub fn settings_get(
+    state: State<'_, Arc<AppState>>,
+) -> Option<serde_json::Value> {
+    let root = state
+        .project_root
+        .lock()
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+        .ok()?
+        .clone();
+    if root.is_empty() {
+        return None;
+    }
+    read_settings(&root, &**state)
+}
+```
+
+`State` は Tauri によって自動的に注入される -- フロントエンドからは渡さない：
+
+```tsx
+// State is NOT passed from frontend -- it's injected by Tauri
+const settings = await invoke("settings_get");
+```
+
+`&**state` パターンは `State` と `Arc` を通じてデリファレンスし、`&AppState` 参照を取得する：
+
+```
+state: State<'_, Arc<AppState>>
+  *state  ->  Arc<AppState>     (deref State)
+  **state ->  AppState          (deref Arc)
+  &**state -> &AppState         (borrow)
+```
+
+## 戻り値の型とエラーハンドリング
+
+### `Option<T>` を返す
+
+値がないことがエラーではない場合に `Option` を使用する：
+
+```rust
+#[tauri::command]
+pub fn draft_read(
+    state: State<'_, Arc<AppState>>,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let path = get_draft_path(&root);
+    read_file_or_none(&path) // Returns None if file doesn't exist
+}
+```
+
+フロントエンドでは、`Option::None` は `null` になる：
+
+```tsx
+const content = await invoke<string | null>("draft_read");
+if (content === null) {
+  // No draft exists
+}
+```
+
+### `Result<T, String>` を返す
+
+エラーの詳細を伝える必要がある場合に `Result` を使用する：
+
+```rust
+#[tauri::command]
+pub fn messages_create(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    content: String,
+) -> Result<String, String> {
+    let root = get_project_root_string(&state)?; // ? propagates String error
+    let archives_dir = get_archives_dir(&root);
+
+    fs::create_dir_all(&archives_dir)
+        .map_err(|e| format!("Failed to create archives dir: {}", e))?;
+
+    let filename = generate_filename(&name);
+    let path = safe_path(&archives_dir, &filename)?;
+    fs::write(&path, &content)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(filename)
+}
+```
+
+フロントエンドでは、`Err` は Promise を reject する：
+
+```tsx
+try {
+  const filename = await invoke<string>("messages_create", {
+    name: "Meeting Notes",
+    content: "# Meeting Notes\n\n...",
+  });
+  console.log("Created:", filename);
+} catch (error) {
+  // error is the String from Err(...)
+  console.error("Failed:", error);
+}
+```
+
+<Warning>
+
+Tauri v2 はエラー型が `String`（または `Into<InvokeError>` を実装する型）であることを要求する。カスタムエラー構造体を直接返すことはできない。`.map_err(|e| format!("...: {}", e))` を使用してエラーを変換する。
+
+</Warning>
+
+### `bool` を返す
+
+エラー詳細なしの単純な成功/失敗の場合：
+
+```rust
+#[tauri::command]
+pub fn settings_save(
+    state: State<'_, Arc<AppState>>,
+    settings: serde_json::Value,
+) -> bool {
+    let root = match state.project_root.lock() {
+        Ok(r) => r.clone(),
+        Err(_) => return false,
+    };
+    if root.is_empty() {
+        return false;
+    }
+    if !settings.is_object() {
+        return false;
+    }
+    save_settings(&root, &settings, &**state)
+}
+```
+
+### シリアライズ可能な構造体を返す
+
+`Serialize` を derive して複雑なデータを返す：
+
+```rust
+#[derive(Serialize, Clone, Debug)]
+pub struct DraftDeleteResult {
+    #[serde(rename = "newCount")]
+    pub new_count: u32,
+    #[serde(rename = "newActive")]
+    pub new_active: u32,
+}
+
+#[tauri::command]
+pub fn drafts_delete(
+    state: State<'_, Arc<AppState>>,
+    draft_number: u32,
+) -> Option<DraftDeleteResult> {
+    // ...
+    Some(DraftDeleteResult {
+        new_count,
+        new_active,
+    })
+}
+```
+
+<Tip>
+
+`#[serde(rename = "camelCase")]` を使用して、Rust の `snake_case` フィールド名を JavaScript/TypeScript フロントエンドが期待する `camelCase` 規約に変換する。
+
+</Tip>
+
+## 非同期コマンド
+
+ネイティブダイアログのように Tauri 非同期ランタイムを必要とする操作では、コマンドを `async` にする：
+
+```rust
+#[tauri::command]
+pub async fn open_directory(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|fp| {
+                fp.as_path()
+                    .map(|p| p.to_string_lossy().to_string())
+            })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+```
+
+<Note>
+
+非同期コマンドは `.await` ポイントをまたいでハンドルを所有する必要がある場合、`State` の代わりに `AppHandle` を受け取る。`State` と `AppHandle` の両方を受け取ることも可能で、最初の `.await` の前に `State` から必要なデータを抽出する。
+
+</Note>
+
+## コマンドモジュールの整理
+
+ドメインごとにコマンドを `commands/` ディレクトリに整理する：
+
+```
+src/commands/
+  mod.rs          # pub mod declarations
+  files.rs        # CRUD operations for files
+  settings.rs     # Settings read/write
+  watchers.rs     # File watcher management
+  terminal.rs     # PTY/terminal commands
+  workspace.rs    # Workspace switching
+  window.rs       # Window management commands
+  fonts.rs        # Font listing
+```
+
+```rust
+// commands/mod.rs
+pub mod files;
+pub mod fonts;
+pub mod settings;
+pub mod terminal;
+pub mod watchers;
+pub mod window;
+pub mod workspace;
+```
+
+### 内部ヘルパーパターン
+
+共有ロジックをコマンドでないヘルパー関数に抽出する：
+
+```rust
+// Not a command -- internal helper
+fn get_project_root_string(
+    state: &AppState,
+) -> Result<String, String> {
+    state
+        .project_root
+        .lock()
+        .map(|r| r.clone())
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+}
+
+// Command that uses the helper
+#[tauri::command]
+pub fn draft_read(
+    state: State<'_, Arc<AppState>>,
+) -> Option<String> {
+    let root = get_project_root_string(&state).ok()?;
+    let path = get_draft_path(&root);
+    read_file_or_none(&path)
+}
+```
+
+これにより、コマンドはパラメータ処理に集中した薄いものになり、実際のロジックは複数のコマンドから呼び出し可能な再利用可能な関数に配置される。
+
+## 重要なポイント
+
+1. **すべてのコマンドを `generate_handler!` に登録する** -- コンパイル時チェックは存在しない
+2. **`State<'_, Arc<AppState>>` を使用する** -- バックグラウンドスレッドと状態を共有するには `Arc` が必要
+3. **失敗の詳細がある場合は `Result<T, String>` を返す**
+4. **不在が通常の場合は `Option<T>` を返す**（ファイルが見つからない、状態が空など）
+5. **`.map_err(|e| format!(...))` を使用してすべてのエラー型を `String` に変換する**
+6. **フロントエンドに適したフィールド名のために `Serialize` を `serde(rename)` 付きで derive する**
+7. **コマンドは薄く保つ** -- 内部ヘルパー関数に委譲する

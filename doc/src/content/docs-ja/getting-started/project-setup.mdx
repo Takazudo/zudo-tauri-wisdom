@@ -1,0 +1,304 @@
+---
+title: プロジェクトセットアップ
+description: Tauri v2アプリのCargo.toml、tauri.conf.json、capabilities、ディレクトリ構成の完全ガイド
+sidebar_position: 2
+---
+
+# プロジェクトセットアップ
+
+このページでは、Tauri v2 プロジェクトに必要な設定ファイルについて解説する。すべての例は実際に動作するアプリケーションから抽出したものである。
+
+## ディレクトリ構成
+
+典型的な Tauri v2 プロジェクトは以下のレイアウトに従う:
+
+```
+my-app/
+  Cargo.toml          # Rust の依存関係とパッケージ設定
+  build.rs            # Tauri ビルドスクリプト（必須）
+  tauri.conf.json     # Tauri 固有の設定
+  capabilities/
+    default.json      # パーミッションとセキュリティ capabilities
+  src/
+    main.rs           # アプリケーションのエントリーポイント
+    lib.rs            # オプションのライブラリモジュール
+  frontend/           # 静的ローディングページ（frontendDist の対象）
+    index.html
+  binaries/           # sidecar binary（externalBin 使用時）
+    node-aarch64-apple-darwin
+  .gitignore
+```
+
+## Cargo.toml
+
+### 最小構成
+
+軽量ラッパーアプリの場合、依存関係は最小限で済む:
+
+```toml
+[package]
+name = "my-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+libc = "0.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+```
+
+`devtools` フィーチャーは WebView の開発者ツール切り替えを有効にする。`libc` クレートは Unix システムでのプロセスシグナル処理（`SIGTERM`、`SIGKILL`）に必要である。
+
+### フル機能構成
+
+より多くの機能（ダイアログ、シェルアクセス、プライベート API、PTY サポート）を持つアプリの場合:
+
+```toml
+[package]
+name = "zudotext"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "zudotext_lib"
+path = "src/lib.rs"
+
+[dependencies]
+tauri = { version = "2", features = ["devtools", "macos-private-api", "webview-data-url"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+tokio = { version = "1", features = ["sync", "net"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", features = ["NSWindow"] }
+objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSString"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+```
+
+<Note>
+
+`macos-private-api` フィーチャーは、透過タイトルバーなどの macOS 固有 API へのアクセスを有効にする。使用するには `tauri.conf.json` で `"macOSPrivateApi": true` も設定する必要がある。
+
+</Note>
+
+### よく使われる Tauri フィーチャー
+
+| フィーチャー | 用途 |
+|---------|---------|
+| `devtools` | WebView 開発者ツールを有効化 |
+| `macos-private-api` | macOS プライベート API（タイトルバーなど）へのアクセス |
+| `webview-data-url` | data URL からのコンテンツ読み込み |
+
+## build.rs
+
+すべての Tauri プロジェクトには `build.rs` ファイルが必要である。内容は常に同じだ:
+
+```rust
+fn main() {
+    tauri_build::build()
+}
+```
+
+これは必須であり省略できない。このファイルがないと、main.rs 内の `tauri::generate_context!()` がコンパイルに失敗する。
+
+## tauri.conf.json
+
+Tauri アプリの中核となる設定ファイルである。構造はアプリの要件によって異なる。
+
+### 軽量ラッパー（開発サーバー型）
+
+外部の開発サーバーをラップするパターンである。サーバーの起動中は `frontendDist` のローディングページを表示し、起動完了後に開発サーバーの URL にナビゲートする。
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "zmod doc",
+  "version": "0.1.0",
+  "identifier": "com.takazudo.zmod-doc",
+  "build": {
+    "frontendDist": "./frontend",
+    "beforeDevCommand": "cd ../../doc && pnpm dev",
+    "devUrl": "http://localhost:32342/"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### フル機能アプリ
+
+独自の Vite ビルドフロントエンドを持つアプリ:
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "zudotext",
+  "version": "0.1.0",
+  "identifier": "com.takazudo.zudotext",
+  "build": {
+    "beforeDevCommand": "pnpm exec vite --config vite.config.ts",
+    "beforeBuildCommand": "pnpm exec vite build --config vite.config.ts",
+    "devUrl": "http://localhost:37461",
+    "frontendDist": "./dist-renderer"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### バンドル済み sidecar アプリ
+
+Node.js binary を外部 sidecar としてバンドルするアプリ:
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Claude Resources",
+  "version": "0.1.0",
+  "identifier": "com.takazudo.claude-resources",
+  "build": {
+    "frontendDist": "./frontend"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "category": "DeveloperTool",
+    "externalBin": ["binaries/node"],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
+```
+
+### 主要フィールドの解説
+
+#### build
+
+| フィールド | 用途 |
+|-------|---------|
+| `frontendDist` | 静的フロントエンドアセットのパス。ローディングページやプロダクションビルド出力に使用される。 |
+| `beforeDevCommand` | `cargo tauri dev` の前に Tauri が実行するシェルコマンド。通常は開発サーバーの起動に使う。 |
+| `beforeBuildCommand` | `cargo tauri build` の前に Tauri が実行するシェルコマンド。通常はフロントエンドのビルドに使う。 |
+| `devUrl` | 開発中に WebView で読み込む URL。 |
+
+<Warning>
+
+`beforeDevCommand` は `cargo tauri dev` の実行時**のみ**動作する。プロダクションの `.app` bundle を起動した際には実行されない。プロダクションで必要なサーバーの起動は Rust コード側で処理する必要がある。
+
+</Warning>
+
+#### app
+
+| フィールド | 用途 |
+|-------|---------|
+| `windows` | ウィンドウ定義。Rust コードからウィンドウを生成する場合は `[]` に設定する。 |
+| `macOSPrivateApi` | macOS プライベート API を有効化。Cargo.toml のフィーチャーに `macos-private-api` も必要。 |
+| `security.csp` | Content Security Policy。開発ツール系アプリでは `null` に設定して無効化する。 |
+
+#### bundle
+
+| フィールド | 用途 |
+|-------|---------|
+| `targets` | ビルドターゲット。`"all"` で全プラットフォームターゲットをビルドする。 |
+| `externalBin` | アプリ内にバンドルする binary のパス。ビルド時に Tauri がターゲットトリプルを自動付与する。 |
+| `category` | macOS アプリカテゴリ。 |
+| `macOS.minimumSystemVersion` | 最小 macOS バージョン。`"10.15"`（Catalina）が妥当なデフォルトである。 |
+
+<Note>
+
+`"windows": []` を設定すると、Tauri によるウィンドウの自動生成は行われない。`setup()` クロージャ内で `WebviewWindowBuilder` を使って自分でウィンドウを生成する必要がある。これにより、ウィンドウの表示タイミングと方法を完全に制御できる。
+
+</Note>
+
+## Capabilities (capabilities/default.json)
+
+Capabilities はアプリに許可される操作を定義する。`capabilities/default.json` を作成する:
+
+```json
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*/**"]
+  },
+  "permissions": ["core:default", "dialog:default", "shell:default"]
+}
+```
+
+### フィールド
+
+| フィールド | 用途 |
+|-------|---------|
+| `identifier` | この capability セットの一意な名前。 |
+| `windows` | この capability が適用されるウィンドウ。 |
+| `remote.urls` | Tauri コマンドへのアクセスを許可する URL。開発サーバー型アプリでは `localhost:*` を使用する。 |
+| `permissions` | パーミッション付与のリスト。`core:default` は常に必要。 |
+
+<Warning>
+
+`remote.urls` フィールドは、localhost サーバーにナビゲートするアプリにとって極めて重要である。この設定がないと、localhost URL から読み込まれた WebView コンテンツは `invoke()` を通じた Tauri コマンドの呼び出しができなくなる。
+
+</Warning>
+
+## .gitignore
+
+Tauri プロジェクトでは以下のエントリを追加する:
+
+```
+/target/
+/gen/
+/binaries/
+```
+
+| パス | 理由 |
+|------|-----|
+| `/target/` | Rust のビルド出力。大容量だが再生成可能。 |
+| `/gen/` | Tauri が生成するファイル（アイコン、Info.plist）。ビルド時に再生成される。 |
+| `/binaries/` | ダウンロードした sidecar binary（Node.js など）。通常 80-100 MB。スクリプトでダウンロードすべきであり、コミットすべきではない。 |
+
+<Tip>
+
+大きな binary をリポジトリにコミットする代わりに、必ずダウンロードスクリプト（`scripts/download-node.sh` など）を用意すること。これによりリポジトリのサイズを小さく保ち、プラットフォーム固有の binary を容易に管理できる。
+
+</Tip>

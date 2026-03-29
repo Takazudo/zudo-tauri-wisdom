@@ -1,0 +1,231 @@
+---
+title: Tauri コマンドにおける Mutex の安全性
+description: Tauri v2 コマンドで Mutex を安全に使用し、poisoned mutex によるクラッシュを防ぐ方法。
+sidebar_position: 2
+---
+
+## 問題
+
+Tauri コマンドは `State<AppState>` を通じてアプリケーション状態を共有する。フィールドは `std::sync::Mutex` で保護されている。Rust の自然なパターンは `.lock().unwrap()` であるが、Tauri アプリケーションではこれは危険である。
+
+いずれかのスレッドが Mutex ロックを保持したままパニックすると、その Mutex は **poisoned** 状態になる。以降のすべての `.lock().unwrap()` もパニックし、アプリケーション全体がダウンする。デスクトップアプリでは、一つのコマンドでユーザーがトリガーしたパニックがプログラム全体をクラッシュさせるべきではない。
+
+<Warning>
+
+Tauri コマンド内の Mutex に対して `.lock().unwrap()` を使ってはならない。アプリのどこか一箇所でのパニックが、poisoned mutex を通じて全体の障害に連鎖する可能性がある。
+
+</Warning>
+
+## AppState パターン
+
+`Mutex` でラップされたフィールドを持つ共有状態を定義する：
+
+```rust
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+pub struct AppState {
+    pub project_root: Mutex<String>,
+    pub settings_cache: Mutex<Option<serde_json::Value>>,
+    pub settings_mtime: Mutex<u64>,
+    pub ptys: Mutex<HashMap<String, PtyInstance>>,
+    pub watchers: Mutex<WatcherState>,
+}
+```
+
+バックグラウンドスレッドで共有できるよう、Tauri に登録する際に `Arc` でラップする：
+
+```rust
+use std::sync::Arc;
+
+fn main() {
+    tauri::Builder::default()
+        .setup(|app| {
+            let app_state = Arc::new(AppState::new(project_root));
+            let http_state = app_state.clone(); // Clone for HTTP server
+            app.manage(app_state);
+
+            // http_state can now be moved into a background task
+            tauri::async_runtime::spawn(async move {
+                http_server::start(http_state, 3001).await;
+            });
+
+            Ok(())
+        })
+        // ...
+}
+```
+
+コマンドは `State<'_, Arc<AppState>>` として受け取る：
+
+```rust
+#[tauri::command]
+pub fn settings_get(state: State<'_, Arc<AppState>>) -> Option<serde_json::Value> {
+    // ...
+}
+```
+
+## ルール 1: コマンドでは `.map_err()` を使う
+
+すべての Tauri コマンドで、ロックエラーを `Result` または `Option` の戻り値に変換する。決して unwrap してはならない：
+
+```rust
+// GOOD: 優雅なエラーハンドリング
+fn get_project_root_string(state: &AppState) -> Result<String, String> {
+    state
+        .project_root
+        .lock()
+        .map(|r| r.clone())
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+}
+
+#[tauri::command]
+pub fn settings_get(state: State<'_, Arc<AppState>>) -> Option<serde_json::Value> {
+    let root = state
+        .project_root
+        .lock()
+        .map_err(|e| format!("Failed to lock project root: {}", e))
+        .ok()?  // Convert to Option, returning None on error
+        .clone();
+    // ...
+}
+```
+
+```rust
+// BAD: mutex が poisoned だとアプリがクラッシュする
+#[tauri::command]
+pub fn settings_get(state: State<'_, Arc<AppState>>) -> Option<serde_json::Value> {
+    let root = state.project_root.lock().unwrap().clone(); // BOOM
+    // ...
+}
+```
+
+`bool` を返すコマンドでは、ロック失敗をサイレントに処理する：
+
+```rust
+#[tauri::command]
+pub fn settings_save(
+    state: State<'_, Arc<AppState>>,
+    settings: serde_json::Value,
+) -> bool {
+    let root = match state.project_root.lock() {
+        Ok(r) => r.clone(),
+        Err(_) => return false,  // Graceful degradation
+    };
+    // ...
+}
+```
+
+## ルール 2: バックグラウンドスレッドでは `.unwrap_or_else()` を使う
+
+ファイルウォッチャーのコールバックのようなコマンド以外のコンテキストでは、フロントエンドにエラーを返すことができない。ここでは `.unwrap_or_else(|e| e.into_inner())` を使って poisoned mutex からデータを回復する：
+
+```rust
+// In a watcher background thread
+let stored = content_arc
+    .lock()
+    .unwrap_or_else(|e| e.into_inner());
+```
+
+これは `PoisonError::into_inner()` が、mutex が poisoned であっても `MutexGuard` を返すことで動作する。データが不整合な状態にある可能性はあるが、読み取り専用のチェック（ファイル内容の比較など）では、これはクラッシュするよりはるかに良い選択である。
+
+<Tip>
+
+`.unwrap_or_else(|e| e.into_inner())` は、データの読み取りであり潜在的な不整合を許容できる場合にのみ使用する。重要なデータの書き込みでは、エラーを伝播させることを推奨する。
+
+</Tip>
+
+## ルール 3: 一貫したロック順序
+
+関数が `AppState` の複数の `Mutex` フィールドをロックする必要がある場合、デッドロックを防ぐために常に同じ順序で取得する：
+
+```rust
+// Lock ordering convention:
+//   1. project_root
+//   2. watchers
+//   3. ptys
+```
+
+この規約はコード内に文書化し、すべての関数で従う必要がある：
+
+```rust
+pub fn restart_watchers(state: &AppState, app: &AppHandle) {
+    // Lock project_root first (step 1)
+    let project_root = match state.project_root.lock() {
+        Ok(pr) => pr.clone(),
+        Err(_) => return,
+    };
+    // Release project_root lock before locking watchers
+
+    // Lock watchers second (step 2)
+    if let Ok(mut ws) = state.watchers.lock() {
+        ws.messages_watcher = None;
+        // ...
+    }
+}
+```
+
+<Warning>
+
+異なる関数間で不整合なロック順序でロックを取得してはならない。関数 A が `project_root` → `watchers` の順にロックし、関数 B が `watchers` → `project_root` の順にロックすると、デッドロックの原因となる。
+
+</Warning>
+
+## ルール 4: ロックスコープを最小化する
+
+ロックの保持時間をできる限り短くする。必要なデータをクローンし、ロックを即座に解放する：
+
+```rust
+// GOOD: クローンして解放
+let root = state
+    .project_root
+    .lock()
+    .map_err(|e| format!("Failed to lock: {}", e))?
+    .clone();  // Lock released here after clone
+// Now work with `root` without holding the lock
+
+// BAD: I/O 中にロックを保持
+let guard = state.project_root.lock().unwrap();
+let content = fs::read_to_string(&*guard)?; // I/O while holding lock!
+```
+
+## ワークスペース切り替えの例
+
+`switch_workspace` メソッドは安全なマルチロックアクセスを実演する：
+
+```rust
+impl AppState {
+    pub fn switch_workspace(&self, new_root: String) -> Result<(), String> {
+        // Lock 1: project_root
+        {
+            let mut root = self
+                .project_root
+                .lock()
+                .map_err(|e| format!("Failed to lock project root: {}", e))?;
+            *root = new_root;
+        } // Lock released
+
+        // Lock 2: settings_cache
+        {
+            let mut cache = self
+                .settings_cache
+                .lock()
+                .map_err(|e| format!("Failed to lock settings cache: {}", e))?;
+            *cache = None;
+        } // Lock released
+
+        // Lock 3: settings_mtime
+        {
+            let mut m = self
+                .settings_mtime
+                .lock()
+                .map_err(|e| format!("Failed to lock settings mtime: {}", e))?;
+            *m = 0;
+        } // Lock released
+
+        Ok(())
+    }
+}
+```
+
+各ロックは独立したブロック内で取得され、次のロックが取得される前に確実に解放される。すべてのエラーは `Result` 値として伝播される。

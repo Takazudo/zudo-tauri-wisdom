@@ -1,0 +1,248 @@
+---
+title: sidecar パターン
+description: Node.jsなどのbinaryをTauri sidecarプロセスとしてバンドル・管理する方法
+sidebar_position: 2
+---
+
+# sidecar パターン
+
+sidecar パターンは、スタンドアロン binary（通常は Node.js）を Tauri の `.app` bundle 内にバンドルする手法である。これによりアプリは自己完結し、ユーザーのシステムにインストールされたツールに依存しなくなる。
+
+## なぜシェルコマンドではダメなのか？
+
+最もよくある初手は `node` や `pnpm` をシェルから呼び出すことである:
+
+```rust
+// Finder から起動すると動作しない
+Command::new("pnpm").args(["dev"]).spawn();
+```
+
+<Warning>
+
+このアプローチはプロダクションでは失敗する。macOS の Finder はアプリを最小限の PATH（`/usr/bin:/bin:/usr/sbin:/sbin`）で起動するためである。Homebrew でインストールした `pnpm`、nvm で管理された `node`、その他の開発者ツールはこの PATH 上にない。コマンドは単に "No such file or directory" で失敗する。
+
+</Warning>
+
+解決策は2つある:
+
+1. **既知の絶対パスで binary を探索する** -- より単純だが、ツールのインストールが必要
+2. **binary をアプリ内にバンドルする** -- 完全に自己完結し、システム依存がない
+
+このページではバンドル方式（オプション2）を解説する。絶対パス方式については、[開発モード vs プロダクションモード](/getting-started/dev-vs-production/)の `find_pnpm()` パターンを参照のこと。
+
+## ステップ1: binary のダウンロード
+
+ターゲットプラットフォーム向けの Node.js スタンドアロン binary をチェックサム検証付きでダウンロードするスクリプトを作成する:
+
+```bash
+#!/usr/bin/env bash
+# scripts/download-node.sh
+# Download Node.js standalone binary for Tauri sidecar bundling.
+
+set -euo pipefail
+
+NODE_VERSION="v24.13.0"
+ARCH="aarch64"
+PLATFORM="darwin"
+TARGET_TRIPLE="${ARCH}-apple-${PLATFORM}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BINARIES_DIR="${APP_DIR}/binaries"
+OUTPUT="${BINARIES_DIR}/node-${TARGET_TRIPLE}"
+
+URL="https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-arm64.tar.gz"
+EXPECTED_SHA256="d595961e563fcae057d4a0fb992f175a54d97fcc4a14dc2d474d92ddeea3b9f8"
+
+if [[ -f "${OUTPUT}" ]]; then
+  echo "Node binary already exists at ${OUTPUT}"
+  echo "Delete it first if you want to re-download."
+  exit 0
+fi
+
+mkdir -p "${BINARIES_DIR}"
+
+TMPDIR_DL="$(mktemp -d)"
+trap 'rm -rf "${TMPDIR_DL}"' EXIT
+
+echo "Downloading Node.js ${NODE_VERSION} for macOS arm64..."
+curl -fSL --progress-bar "${URL}" -o "${TMPDIR_DL}/node.tar.gz"
+
+echo "Verifying checksum..."
+ACTUAL_SHA256="$(shasum -a 256 "${TMPDIR_DL}/node.tar.gz" | cut -d ' ' -f 1)"
+if [[ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]]; then
+  echo "ERROR: SHA256 mismatch!"
+  echo "  Expected: ${EXPECTED_SHA256}"
+  echo "  Actual:   ${ACTUAL_SHA256}"
+  exit 1
+fi
+echo "Checksum OK."
+
+echo "Extracting binary..."
+tar -xzf "${TMPDIR_DL}/node.tar.gz" -C "${TMPDIR_DL}" \
+  --strip-components=2 "node-${NODE_VERSION}-darwin-arm64/bin/node"
+
+mv "${TMPDIR_DL}/node" "${OUTPUT}"
+chmod +x "${OUTPUT}"
+
+echo "Done: ${OUTPUT}"
+echo "Size: $(du -h "${OUTPUT}" | cut -f1)"
+```
+
+このスクリプトの重要なポイント:
+
+- **SHA256 検証**によりサプライチェーン攻撃を防止し、再現可能なビルドを保証する
+- **冪等性** -- binary がすでに存在する場合はクリーンに終了する
+- **ターゲットトリプル命名** -- 出力ファイルは `node-aarch64-apple-darwin` という名前で、これは Tauri が期待する規約である
+
+<Tip>
+
+チェックサムは必ず検証すること。ダウンロードする特定バージョンの公式 Node.js リリースページ（SHASUMS256.txt）から期待される SHA256 を取得する。
+
+</Tip>
+
+## ステップ2: externalBin の設定
+
+`tauri.conf.json` で、binary のパスをターゲットトリプルサフィックスなしで宣言する:
+
+```json
+{
+  "bundle": {
+    "externalBin": ["binaries/node"]
+  }
+}
+```
+
+Tauri はビルドプロセス中にターゲットトリプルを自動的に付与する。つまり `binaries/node` は以下のようになる:
+
+- Apple Silicon では `binaries/node-aarch64-apple-darwin`
+- Intel Mac では `binaries/node-x86_64-apple-darwin`
+
+`binaries/` ディレクトリ内の binary ファイルは、完全なターゲットトリプル付きの名前でなければならない。
+
+## ステップ3: Rust での binary パス解決
+
+ランタイムでは、バンドルされた binary を見つける必要がある。パスは開発モードかプロダクションモードかによって異なる:
+
+```rust
+fn node_binary_path() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("Failed to get current exe path");
+    let dir = exe.parent().expect("Failed to get exe directory");
+
+    // 開発モード: Tauri はファイル名にターゲットトリプルを保持する
+    let target_triple = format!("{}-apple-darwin", std::env::consts::ARCH);
+    let dev_path = dir.join(format!("node-{}", target_triple));
+    if dev_path.exists() {
+        return dev_path;
+    }
+
+    // プロダクション bundle: Tauri はターゲットトリプルを除去する
+    dir.join("node")
+}
+```
+
+<Warning>
+
+見落としやすい重要な点がある: **Tauri はプロダクション bundle で binary 名からターゲットトリプルを除去する**。開発中、binary は `node-aarch64-apple-darwin` にある。プロダクションの `.app` bundle では単に `node` となる。コードは両方のケースに対応する必要がある。
+
+</Warning>
+
+### パスが異なる理由
+
+`cargo tauri dev` の実行中、binary はコンパイルされた Rust binary と同じディレクトリ（`target/debug/` 内）にコピーされ、ターゲットトリプルを含む完全な名前を保持する。
+
+`cargo tauri build` を実行すると、Tauri は `.app` bundle の `Contents/MacOS/` 内に binary をバンドルし、ターゲットトリプルサフィックスを除去する。
+
+```
+# 開発モードのディレクトリ (target/debug/)
+node-aarch64-apple-darwin    <-- トリプル付きの完全な名前
+
+# プロダクション bundle (MyApp.app/Contents/MacOS/)
+node                         <-- トリプルが除去される
+my-app                       <-- アプリ binary
+```
+
+## ステップ4: binary の存在確認
+
+起動を試みる前に、必ず binary の存在を確認する。明確なエラーメッセージは何時間ものデバッグを節約する:
+
+```rust
+fn spawn_sidecar() -> Sidecar {
+    let node = node_binary_path();
+
+    if !node.exists() {
+        let msg = format!(
+            "Node binary not found at {}. Run scripts/download-node.sh first.",
+            node.display()
+        );
+        log(&msg);
+        panic!("{msg}");
+    }
+
+    let mut cmd = Command::new(&node);
+    cmd.args(["scripts/dev-stable.js"])
+        .current_dir(&dir)
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_clone));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let child = cmd.spawn().expect("Failed to spawn node sidecar");
+    let pid = child.id();
+
+    Sidecar { child, pid }
+}
+```
+
+## ステップ5: binary を .gitignore に追加
+
+ダウンロードした binary は大容量（Node.js の場合、通常 80-100 MB）でプラットフォーム固有である。絶対にコミットしてはならない:
+
+```
+/binaries/
+```
+
+代わりに、ダウンロード手順を README やセットアップスクリプトに記載する。ダウンロードスクリプトが使用する binary バージョンの情報源となる。
+
+## 完全なファイルレイアウト
+
+```
+my-app/
+  Cargo.toml
+  tauri.conf.json              # externalBin: ["binaries/node"]
+  binaries/
+    node-aarch64-apple-darwin  # ダウンロードした binary（gitignore 対象）
+  scripts/
+    download-node.sh           # コミットするダウンロードスクリプト
+  src/
+    main.rs                    # node_binary_path() + 起動ロジック
+  frontend/
+    index.html                 # ローディングページ
+  .gitignore                   # /binaries/ を含む
+```
+
+## システム依存の代替手段
+
+ユーザーが適切なツールをインストールしていることを前提にできる場合（開発者ツールでは一般的）、sidecar のバンドルを省略し、代わりに既知のシステムパスで binary を探索できる:
+
+```rust
+fn find_pnpm() -> Option<PathBuf> {
+    let candidates = [
+        "/opt/homebrew/bin/pnpm",  // Apple Silicon Homebrew
+        "/usr/local/bin/pnpm",     // Intel Homebrew
+    ];
+    for p in &candidates {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+```
+
+これはより単純だが、アプリがユーザーのシステム構成に依存することになる。配布にはバンドル済み sidecar アプローチが推奨される。
