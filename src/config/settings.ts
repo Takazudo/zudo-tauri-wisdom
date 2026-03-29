@@ -30,6 +30,9 @@ export const settings = {
   noindex: false as boolean,
   editUrl: false as string | false,
   siteUrl: "" as string,
+  onBrokenMarkdownLinks: "warn" as "warn" | "error" | "ignore",
+  sidebarResizer: false as boolean,
+  sidebarToggle: false as boolean,
   docsDir: "src/content/docs",
   locales: {
     ja: { label: "JA", dir: "src/content/docs-ja" },
