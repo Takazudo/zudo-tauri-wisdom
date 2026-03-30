@@ -7,6 +7,8 @@ __inbox/
 worktrees/
 # Generated skill files (contain machine-specific absolute paths)
 .claude/skills/tauri-wisdom/SKILL.md
+.claude/skills/tauri-wisdom/docs
+.claude/skills/tauri-wisdom/docs-ja
 *.tgz
 .env
 .env.*
