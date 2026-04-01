@@ -54,7 +54,7 @@ export const settings = {
   footer: {
     links: [],
     copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>. Enjoy synth on <a href="https://takazudomodular.com/">Takazudo Modular</a>.`,
-  } satisfies FooterConfig,
+  } as FooterConfig,
   headerNav: [
     { label: "Overview", path: "/docs/getting-started", categoryMatch: "getting-started" },
     { label: "Architecture", path: "/docs/architecture", categoryMatch: "architecture" },
@@ -64,5 +64,5 @@ export const settings = {
     { label: "Deployment", path: "/docs/deployment", categoryMatch: "deployment" },
     { label: "Recipes", path: "/docs/recipes", categoryMatch: "recipes" },
     { label: "Claude", path: "/docs/claude", categoryMatch: "claude" },
-  ] satisfies HeaderNavItem[],
+  ] as HeaderNavItem[],
 };
