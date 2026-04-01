@@ -29,6 +29,8 @@ pnpm b4push       # Pre-push validation (format + typecheck + build)
 - Japanese: `src/content/docs-ja/` -> `/ja/docs/...`
 - Japanese docs should mirror the English directory structure
 
+**Bilingual rule**: When creating or updating any doc page, ALWAYS update both the English (`docs/`) and Japanese (`docs-ja/`) versions in the same PR. Keep code blocks identical between languages -- only translate surrounding prose. If a Japanese version does not yet exist, create it.
+
 ## Content Categories
 
 - `getting-started/` - Overview, project setup, dev vs production mode
