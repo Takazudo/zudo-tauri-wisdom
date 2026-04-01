@@ -16,6 +16,10 @@ sidebar_position: 1
 
 Tauri の WebView に固有の、微妙だが深刻なパフォーマンスバグ。[useEffect の落とし穴](/frontend/use-effect-pitfall/)ページでは、`useLayoutEffect` による IPC 呼び出しが macOS のビーチボール（レインボースピナー）を引き起こす理由とその修正方法を解説する。
 
+### Playwright テストの落とし穴
+
+Tauri はプラットフォームごとに異なるレンダリングエンジンを使用する（macOS/Linux は WebKit、Windows は Chromium）。Chromium のみで Playwright テストを実行すると誤った安心感を与える。[Playwright テスト](/frontend/playwright-engine-pitfall/)ページでは、エンジンの不一致と階層化テスト戦略の構築方法を解説する。
+
 ### Capabilities と権限
 
 Tauri v2 はフロントエンドがアクセスできる内容を制御する Capabilities システムを使用する。[Capabilities](/frontend/capabilities/)ページでは、権限モデル、プラグインアクセス、セキュリティの考慮事項を扱う。
