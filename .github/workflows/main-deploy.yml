@@ -89,7 +89,7 @@ jobs:
       - name: Deploy to Cloudflare Pages (production)
         run: |
           npx wrangler@4 pages deploy deploy \
-            --project-name=takazudo-zudo-tauri \
+            --project-name=zudo-tauri \
             --branch=main \
             --commit-hash="${GITHUB_SHA}" \
             --commit-message="Production deploy: ${GITHUB_SHA}"

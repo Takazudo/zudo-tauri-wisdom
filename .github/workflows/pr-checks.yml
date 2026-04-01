@@ -121,12 +121,12 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
 
           npx wrangler@4 pages deploy deploy \
-            --project-name=takazudo-zudo-tauri \
+            --project-name=zudo-tauri \
             --branch="pr-${PR_NUMBER}" \
             --commit-hash="${GITHUB_SHA}" \
             --commit-message="Preview: PR #${PR_NUMBER}"
 
-          DEPLOY_URL="https://pr-${PR_NUMBER}.takazudo-zudo-tauri.pages.dev"
+          DEPLOY_URL="https://pr-${PR_NUMBER}.zudo-tauri.pages.dev"
           echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "Preview URL: $DEPLOY_URL"
         env:
