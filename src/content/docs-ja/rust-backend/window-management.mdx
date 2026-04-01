@@ -79,6 +79,12 @@ pub fn close_splash_window(handle: &tauri::AppHandle) {
 
 </Note>
 
+<Warning>
+
+**表示ギャップ**に注意：メインウィンドウが表示される前にスプラッシュを閉じると、一瞬ウィンドウが何も表示されない状態になる。スプラッシュはメインウィンドウの表示準備ができるまで開いたままにするか、スプラッシュを完全にスキップして `PageLoadEvent::Finished` または遅延 `show()` を使用した非表示メインウィンドウを使用する。
+
+</Warning>
+
 ## 開発サーバーポーリング付きメインウィンドウ
 
 開発時には、ウィンドウ作成時に Vite 開発サーバーがまだ準備できていない場合がある。パターンは：ローディングページを即座に表示し、サーバーが応答したら開発サーバーにナビゲートする。
@@ -147,7 +153,16 @@ pub fn create_main_window(
         });
     }
 
-    // Show after a short delay
+    // 二重安全策: フォーカスイベント または 遅延で表示
+    let win_clone = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(true) = event {
+            if !win_clone.is_visible().unwrap_or(false) {
+                let _ = win_clone.show();
+            }
+        }
+    });
+
     let win = window.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -188,6 +203,60 @@ fn wait_for_dev_server(url: &str, timeout_secs: u64) -> bool {
 `TcpStream::connect` は準備完了チェックにおいて HTTP リクエストより高速である。完全な HTTP レスポンスを待たずに、ポートが開いた時点で即座に返る。
 
 </Tip>
+
+<Warning>
+
+上記の `data:` URL アプローチは `Cargo.toml` で `webview-data-url` cargo feature を有効にする必要がある。有効にしないと、WebView は data URL を読み込めない。バンドルされた HTML ファイル（`WebviewUrl::default()` または `WebviewUrl::App(...)`）の方がメンテナンス性で優れる -- 編集しやすく、外部アセットを含めることができ、追加の feature flag が不要である。
+
+</Warning>
+
+<Tip>
+
+`on_window_event(Focused)` ハンドラはセーフティネットとして機能する -- タイマーによる `show()` が WebView のレンダリング完了前に発火した場合、Focused イベントがキャッチする。両方を組み合わせることで、どちらか単独よりも信頼性の高い動作が得られる。
+
+</Tip>
+
+## アンチフラッシュ: ページ読み込み時に表示
+
+バンドル済みフロントエンドを読み込むアプリ（サーバーポーリング不要）では、白フラッシュを防ぐ最もシンプルな方法は、非表示で開始し最初のページ読み込み時に表示すること：
+
+```rust
+use tauri::webview::PageLoadEvent;
+
+tauri::Builder::default()
+  .on_page_load(|webview, payload| {
+    if webview.label() == "main"
+      && matches!(payload.event(), PageLoadEvent::Finished)
+    {
+      let _ = webview.window().show();
+    }
+  })
+```
+
+これは手動の 200ms 遅延アプローチに代わるもので、実際のコンテンツのレンダリングを待つためより信頼性が高い。
+
+<Note>
+
+ウィンドウビルダーで `.visible(false)` と組み合わせることで、ウィンドウは非表示で開始され、ページが完全に読み込まれた後にのみ表示される。
+
+</Note>
+
+<Note>
+
+Rust 側ではなくフロントエンドの JavaScript API からウィンドウの表示を制御する場合、Tauri v2 の設定で以下のケイパビリティを付与する必要がある：
+
+```json
+{
+  "permissions": [
+    "core:window:allow-show",
+    "core:window:allow-hide"
+  ]
+}
+```
+
+これらのパーミッションがないと、フロントエンドからの `appWindow.show()` や `appWindow.hide()` の呼び出しは黙って失敗する。
+
+</Note>
 
 ## macOS：長押しアクセント文字メニューの抑制
 
@@ -324,8 +393,14 @@ flowchart TD
 
 1. **プログラムでウィンドウを作成する場合、`tauri.conf.json` の `"windows": []` を空にする**
 2. **ウィンドウは非表示で開始する** -- コンテンツが準備できてから表示し、白いフラッシュを回避する
-3. **ローディングページには `data:` URL を使用する** -- バンドルされた HTML ファイルは不要
+3. **ローディングページには `data:` URL を使用する** -- バンドルされた HTML ファイルは不要（ただし `webview-data-url` feature flag が必要）
 4. **TCP 接続で開発サーバーをポーリングする** -- HTTP リクエストより高速
 5. **子プロセスはウィンドウ破棄時に必ずクリーンアップする**
 6. **`on_navigation` でリンクの動作を制御する** -- 外部リンクはデフォルトブラウザで開く
 7. **プラットフォーム固有のコード** は `#[cfg(target_os = "macos")]` ガードの背後に配置する
+
+<Warning>
+
+`tauri-plugin-window-state` を使用する場合、起動時に永続化された `VISIBLE` 状態が復元される可能性があり、非表示→表示パターンと競合する。表示フラグの永続化を明示的に除外するか、プラグインがコードの準備ができる前にウィンドウを表示してしまう。
+
+</Warning>
