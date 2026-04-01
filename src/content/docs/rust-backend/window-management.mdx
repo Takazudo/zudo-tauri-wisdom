@@ -79,6 +79,12 @@ When creating windows programmatically, keep the `"windows"` array in `tauri.con
 
 </Note>
 
+<Warning>
+
+Watch out for the **visibility gap**: if you close the splash before the main window is visible, the user briefly sees no window at all. Either keep the splash open until the main window is ready to show, or skip the splash entirely and use a hidden main window with `PageLoadEvent::Finished` or a delayed `show()`.
+
+</Warning>
+
 ## Main window with dev server polling
 
 In development, the Vite dev server may not be ready when the window is created. The pattern is: show a loading page immediately, then navigate to the dev server once it responds.
@@ -147,7 +153,16 @@ pub fn create_main_window(
         });
     }
 
-    // Show after a short delay
+    // Belt-and-suspenders: show on focus event OR after delay
+    let win_clone = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(true) = event {
+            if !win_clone.is_visible().unwrap_or(false) {
+                let _ = win_clone.show();
+            }
+        }
+    });
+
     let win = window.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -194,6 +209,12 @@ fn wait_for_dev_server(url: &str, timeout_secs: u64) -> bool {
 The `data:` URL approach shown above requires the `webview-data-url` cargo feature to be enabled in `Cargo.toml`. Without it, the webview will fail to load data URLs. Bundled HTML files (`WebviewUrl::default()` or `WebviewUrl::App(...)`) are generally preferred for maintainability -- they are easier to edit, can include external assets, and do not require extra feature flags.
 
 </Warning>
+
+<Tip>
+
+The `on_window_event(Focused)` handler acts as a safety net -- if the timed `show()` fires before the webview finishes rendering, the Focused event will catch it. Combining both gives more reliable behavior than either alone.
+
+</Tip>
 
 ## Anti-flash: show on page load
 
