@@ -235,6 +235,23 @@ sequenceDiagram
   Window-->>User: Real content visible
 ```
 
+## Choosing the Right Startup Pattern
+
+Different apps have different startup needs. This table helps you pick the right approach:
+
+| Scenario                                                       | Recommended pattern                                                          | Where documented                                                                                      |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| App wraps a dev server / sidecar with 5-30s startup            | Bundled loading HTML via `WebviewUrl::default()` + background polling        | This page                                                                                             |
+| SPA that just needs to avoid white flash on launch             | Hidden window + `show()` on `PageLoadEvent::Finished`                        | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
+| App has blocking init (DB migrations, auth, first-run setup)   | Separate splash window (frameless, transparent)                              | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
+| Dev mode inline loading page                                   | `data:` URL (requires `webview-data-url` cargo feature)                      | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
+
+<Tip>
+
+The official Tauri v2 splashscreen guide recommends showing the main window quickly with in-app loading state over using a separate splash window, whenever possible.
+
+</Tip>
+
 ## The Refresh Pattern
 
 When implementing a refresh command (Cmd+R), you can reuse the same loading-then-navigate pattern:

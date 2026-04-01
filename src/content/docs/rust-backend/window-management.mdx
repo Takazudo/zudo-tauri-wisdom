@@ -79,6 +79,12 @@ When creating windows programmatically, keep the `"windows"` array in `tauri.con
 
 </Note>
 
+<Warning>
+
+Watch out for the **visibility gap**: if you close the splash before the main window is visible, the user briefly sees no window at all. Either keep the splash open until the main window is ready to show, or skip the splash entirely and use a hidden main window with `PageLoadEvent::Finished` or a delayed `show()`.
+
+</Warning>
+
 ## Main window with dev server polling
 
 In development, the Vite dev server may not be ready when the window is created. The pattern is: show a loading page immediately, then navigate to the dev server once it responds.
@@ -147,7 +153,16 @@ pub fn create_main_window(
         });
     }
 
-    // Show after a short delay
+    // Belt-and-suspenders: show on focus event OR after delay
+    let win_clone = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(true) = event {
+            if !win_clone.is_visible().unwrap_or(false) {
+                let _ = win_clone.show();
+            }
+        }
+    });
+
     let win = window.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -188,6 +203,60 @@ fn wait_for_dev_server(url: &str, timeout_secs: u64) -> bool {
 `TcpStream::connect` is faster than an HTTP request for readiness checks. It returns as soon as the port is open, without waiting for the full HTTP response.
 
 </Tip>
+
+<Warning>
+
+The `data:` URL approach shown above requires the `webview-data-url` cargo feature to be enabled in `Cargo.toml`. Without it, the webview will fail to load data URLs. Bundled HTML files (`WebviewUrl::default()` or `WebviewUrl::App(...)`) are generally preferred for maintainability -- they are easier to edit, can include external assets, and do not require extra feature flags.
+
+</Warning>
+
+<Tip>
+
+The `on_window_event(Focused)` handler acts as a safety net -- if the timed `show()` fires before the webview finishes rendering, the Focused event will catch it. Combining both gives more reliable behavior than either alone.
+
+</Tip>
+
+## Anti-flash: show on page load
+
+For apps that load bundled frontend (no server polling needed), the simplest way to prevent white flash is to start hidden and show on first page load:
+
+```rust
+use tauri::webview::PageLoadEvent;
+
+tauri::Builder::default()
+  .on_page_load(|webview, payload| {
+    if webview.label() == "main"
+      && matches!(payload.event(), PageLoadEvent::Finished)
+    {
+      let _ = webview.window().show();
+    }
+  })
+```
+
+This replaces the manual 200ms delay approach and is more reliable because it waits for actual content to render.
+
+<Note>
+
+Combine this with `.visible(false)` on the window builder so the window starts hidden and only appears once the page has fully loaded.
+
+</Note>
+
+<Note>
+
+If you control window visibility from the frontend JavaScript API instead of from Rust, you must grant these capabilities in your Tauri v2 configuration:
+
+```json
+{
+  "permissions": [
+    "core:window:allow-show",
+    "core:window:allow-hide"
+  ]
+}
+```
+
+Without these permissions, calls to `appWindow.show()` or `appWindow.hide()` from the frontend will silently fail.
+
+</Note>
 
 ## macOS: suppress press-and-hold accent menu
 
@@ -324,8 +393,14 @@ flowchart TD
 
 1. **Keep `"windows": []` empty in tauri.conf.json** when creating windows programmatically
 2. **Start windows hidden** and show after content is ready to avoid white flash
-3. **Use `data:` URLs for loading pages** -- no need for bundled HTML files
+3. **Use `data:` URLs for loading pages** -- no need for bundled HTML files (but note the `webview-data-url` feature flag requirement)
 4. **Poll dev server with TCP connect** -- faster than HTTP requests
 5. **Always clean up child processes** on window destroy
 6. **Use `on_navigation` to control link behavior** -- open external links in the default browser
 7. **Platform-specific code** goes behind `#[cfg(target_os = "macos")]` guards
+
+<Warning>
+
+If you use `tauri-plugin-window-state`, it may restore the persisted `VISIBLE` state on launch, which fights with the hidden-then-show pattern. You need to explicitly exclude the visibility flag from being persisted, or the plugin will show the window before your code is ready to display content.
+
+</Warning>
