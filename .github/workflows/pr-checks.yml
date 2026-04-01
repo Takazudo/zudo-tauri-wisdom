@@ -121,7 +121,7 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
 
           npx wrangler@4 pages deploy deploy \
-            --project-name=takazudo-zudo-tauri \
+            --project-name=zudo-tauri \
             --branch="pr-${PR_NUMBER}" \
             --commit-hash="${GITHUB_SHA}" \
             --commit-message="Preview: PR #${PR_NUMBER}"

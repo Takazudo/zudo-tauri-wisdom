@@ -16,6 +16,10 @@ The bridge between your frontend and Rust backend. The [IPC Commands](/frontend/
 
 A subtle but severe performance bug specific to Tauri's webview. The [useEffect Pitfall](/frontend/use-effect-pitfall/) page explains why `useLayoutEffect` with IPC calls causes the macOS beach ball and how to fix it.
 
+### Playwright Testing Pitfall
+
+Tauri uses different rendering engines per platform (WebKit on macOS/Linux, Chromium on Windows). Running Playwright tests only in Chromium gives false confidence. The [Playwright Testing](/frontend/playwright-engine-pitfall/) page explains the engine mismatch and how to build a layered testing strategy.
+
 ### Capabilities and Permissions
 
 Tauri v2 uses a capabilities system to control what the frontend can access. The [Capabilities](/frontend/capabilities/) page covers the permission model, plugin access, and security considerations.
