@@ -77,9 +77,33 @@ const full: PresetConfig = {
 
 設定ファイルは、プリセットのデフォルトと `validateSettings()` をマージして生成され、すべての必須フィールドが存在することを保証する。
 
+```ts
+const raw = {
+  ...defaultSettings,
+  ...userSettings,
+  general: {
+    ...defaultSettings.general,
+    ...(userSettings.general ?? {}),
+    projectRoot: targetDir,
+  },
+  pins: pinConfigs.length > 0 ? pinConfigs : defaultSettings.pins,
+};
+const mergedSettings = validateSettings(raw) ?? defaultSettings;
+```
+
 ### ステップ 2: Tauri 設定オーバーライドの作成
 
 ジェネレーターは異なる部分のみをオーバーライドする最小限の JSON ファイルを作成する。
+
+```ts
+const tauriConf = {
+  productName: appName,
+  identifier: `com.takazudo.${appName}`,
+};
+fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
+```
+
+これは `tauri-app/tauri.conf.ztoffice.json` を生成する：
 
 ```json
 {
@@ -93,6 +117,14 @@ Tauri の `--config` フラグがビルド時にこれをベースの `tauri.con
 ### ステップ 3: ランタイム設定の作成
 
 ランタイム設定はアプリにワークスペースの場所を伝える。
+
+```ts
+const configDir = path.join(os.homedir(), ".config", "zudotext", appName);
+const appConfig = { workspace: workspacePath };
+fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2) + "\n");
+```
+
+これは `~/.config/zudotext/ztoffice/config.json` を作成する：
 
 ```json
 {
@@ -117,6 +149,17 @@ execFileSync(
 ### ステップ 5: インストール（オプション）
 
 `--install` が指定された場合、ビルドされた `.app` が `/Applications` にコピーされる。
+
+```ts
+const builtApp = path.join(tauriDir, "target/release/bundle/macos", `${appName}.app`);
+const dest = path.join("/Applications", `${appName}.app`);
+
+if (fs.existsSync(dest)) {
+  const ok = await confirm(`${dest} already exists. Replace it?`);
+  if (ok) fs.rmSync(dest, { recursive: true });
+}
+fs.cpSync(builtApp, dest, { recursive: true });
+```
 
 <Warning>
 

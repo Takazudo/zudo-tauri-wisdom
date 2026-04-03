@@ -32,27 +32,67 @@ export interface AppSettings {
     formatOnArchive: boolean;
     windowOpacity: number;       // 0.3 - 1.0
     useAiTitleSummarize: boolean;
-    displayScale: number;         // 離散ステップ: 0.75, 0.9, 1.0, ...
+    displayScale: number;         // discrete steps: 0.75, 0.9, 1.0, ...
   };
+  pins: PinConfig[];
+  color: ColorSettings;           // 16 semantic color hex values
+  activeDraft: number;            // 1-99
+  draftCount: number;             // 1-99
   editor: {
     vimMode: boolean;
     fontFamily: string;
     fontSize: number;             // 10-24
     lineHeight: number;           // 1.0-2.0
-    // ...
+    paddingHorizontal: number;    // 0-48
+    paddingVertical: number;      // 0-48
+    typewriterScrolling: boolean;
+    showStatusBar: boolean;
+    markdownListIndent: boolean;
+    listHangingIndent: boolean;
+    showIndentGuides: boolean;
+    indentType: "tab" | "spaces";
+    indentSize: number;           // 1-8
   };
+  vim: VimSettings;
   terminal: {
     fontSize: number;             // 10-24
+    fontFamily: string;
+    lineHeight: number;           // 1.0-2.0
     cursorStyle: "block" | "underline" | "bar";
-    // ...
+    shell: string;
   };
-  // ...他のセクション
+  shortcuts: { /* 35+ shortcut bindings */ };
+  layout: {
+    terminalPosition: "top" | "right" | "bottom" | "left";
+    terminalVisible: boolean;
+    terminalSize: number;         // 10-90
+  };
+  fontCandidates: string[];
+  sync: SyncSettings;
 }
 ```
 
 ## validateSettings() 関数
 
 この関数は `unknown` 入力を受け取り、完全に型付けされた `AppSettings` または `null` を返す。
+
+```ts
+export function validateSettings(settings: unknown): AppSettings | null {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings))
+    return null;
+
+  const s = settings as Record<string, any>;
+
+  // ... migrations ...
+  // ... field validation ...
+
+  return {
+    general: { /* validated fields */ },
+    editor: { /* validated fields */ },
+    // ...
+  };
+}
+```
 
 ### デフォルト付き型チェック
 
@@ -174,6 +214,13 @@ for (let i = 1; i <= 10; i++) {
     s.shortcuts[newKey] = s.shortcuts[oldKey];
   }
 }
+
+// layout.direction + layout.swapped -> layout.terminalPosition
+terminalPosition: s.layout?.direction === "vertical"
+  ? (s.layout?.swapped ? "bottom" : "top")
+  : s.layout?.direction === "horizontal"
+    ? (s.layout?.swapped ? "right" : "left")
+    : defaultLayoutSettings.terminalPosition,
 ```
 
 <Note>
@@ -199,7 +246,10 @@ const validPins = rawPins
     path: p.path,
     title: p.title,
     ...(p.type === "file" || p.type === "directory" ? { type: p.type } : {}),
+    ...(typeof p.favorite === "boolean" ? { favorite: p.favorite } : {}),
   }));
+
+const pins = validPins.length > 0 ? validPins : [...defaultPinsSettings];
 ```
 
 これにより、部分的に編集されたエントリ（パスまたはタイトルのみ入力済み）は保持されるが、完全に空のものは削除される。

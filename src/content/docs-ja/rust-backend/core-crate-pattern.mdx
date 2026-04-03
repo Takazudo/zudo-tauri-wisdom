@@ -192,6 +192,11 @@ pub fn discover_draft_count(project_root: &str) -> u32 {
     }
     if max == 0 { 1 } else { max }
 }
+
+pub fn drafts_tidy_up(project_root: &str) -> Option<TidyUpResult> {
+    // Collect non-empty drafts, compact gaps, remove trailing files
+    // ...complex logic with disk I/O...
+}
 ```
 
 テストはリアルなディレクトリ構造を作成する。

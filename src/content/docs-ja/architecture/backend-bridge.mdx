@@ -43,11 +43,13 @@ export interface BackendAPI {
     onData: (callback: (id: string, data: string) => void) => () => void;
     // ...
   };
+  draft: { /* ... */ };
+  drafts: { /* ... */ };
   settings: {
     get: () => Promise<AppSettings | null>;
     save: (settings: AppSettings) => Promise<boolean>;
   };
-  // ...他のドメイン
+  // ...more domains
 }
 ```
 
@@ -101,6 +103,27 @@ export function createTauriAdapter(): BackendAPI {
 
 イベントリスナーは `syncListen` ヘルパーを使用する。これは Tauri の非同期 `listen()` をラップして同期的なクリーンアップ関数を返し、`BackendAPI` の契約に合わせる。
 
+```ts
+function syncListen<T>(
+  event: string,
+  handler: (payload: T) => void,
+): () => void {
+  let unlistenFn: (() => void) | null = null;
+  let cancelled = false;
+
+  listen<T>(event, (e) => handler(e.payload))
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlistenFn = fn;
+    });
+
+  return () => {
+    cancelled = true;
+    unlistenFn?.();
+  };
+}
+```
+
 ### MockAdapter -- インメモリ
 
 フロントエンドのみの開発（`pnpm dev:mock`）と Storybook/テストで使用。インメモリの `Map` オブジェクトを使ってフル API を実装する。
@@ -123,6 +146,13 @@ export function createMockAdapter(options?: MockAdapterOptions): {
     },
     // ...
   };
+
+  const controls: MockControls = {
+    triggerMessagesChanged: (...args) => messagesChanged.emit(...args),
+    files,
+    // ...
+  };
+
   return { api, controls };
 }
 ```
@@ -158,8 +188,14 @@ export function createRestAdapter(baseUrl = "http://localhost:3001"): BackendAPI
   return {
     messages: {
       list: () => getJson<MessageMeta[]>("/api/messages"),
+      read: (filename) => getText(`/api/messages/${encodeURIComponent(filename)}`),
+      onChanged: (callback) =>
+        sseListener("messages:changed", (data) =>
+          callback((data as { filename?: string }).filename)
+        ),
       // ...
     },
+    // ...
   };
 }
 ```

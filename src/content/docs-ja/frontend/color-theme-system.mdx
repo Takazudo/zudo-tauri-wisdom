@@ -112,9 +112,20 @@ export function schemaToColors(scheme: ColorScheme): ColorSettings {
   return {
     bgPrimary: bg,
     bgSecondary: sem.bgSecondary,
+    bgSurface: sem.surface,
     textPrimary: fg,
+    textSecondary: sem.textSecondary,
     accent: sem.accent,
-    // ...
+    accentSubtle: sem.accentSubtle,
+    border: sem.border,
+    danger: sem.danger,
+    dangerStrong: sem.dangerStrong,
+    onAccent: sem.onAccent,
+    hoverOverlay: sem.hoverOverlay,
+    hoverBg: sem.hoverBg,
+    hoverFg: sem.hoverFg,
+    selection: resolveColor(scheme.selectionBg, p, p[8]),
+    cursor: resolveColor(scheme.cursor, p, p[6]),
   };
 }
 ```
@@ -126,10 +137,13 @@ export function schemaToColors(scheme: ColorScheme): ColorSettings {
 ```ts
 // "default-dark" はいくつかのセマンティックトークンをオーバーライド
 semantic: {
-  bgSecondary: "bg",    // 背景色を使用（特殊参照）
-  surface: 0,           // パレットインデックス 0
-  accent: 3,            // パレットインデックス 3（イエロー）
-  onAccent: "bg",       // アクセント上のテキスト = 背景色
+  bgSecondary: "bg",    // Use background color (special ref)
+  surface: 0,           // Palette index 0
+  accent: 3,            // Palette index 3 (yellow)
+  accentSubtle: 12,     // Palette index 12
+  border: 8,            // Palette index 8
+  onAccent: "bg",       // Text on accent = background color
+  hoverOverlay: 13,
   hoverBg: 13,
   hoverFg: 11,
 }
@@ -147,8 +161,12 @@ export const SEMANTIC_DEFAULTS: Record<string, number> = {
   surface: 0,
   textSecondary: 15,
   accent: 3,
+  accentSubtle: 3,
   border: 0,
   danger: 1,
+  dangerStrong: 9,
+  onAccent: 9,
+  hoverOverlay: 15,
   hoverBg: 8,
   hoverFg: 7,
 };
@@ -176,6 +194,8 @@ export function applyTheme(themeName: string): ColorScheme {
 
   root.style.setProperty("--palette-bg", resolveColor(scheme.background, p, p[0]));
   root.style.setProperty("--palette-fg", resolveColor(scheme.foreground, p, p[15]));
+  root.style.setProperty("--palette-cursor", resolveColor(scheme.cursor, p, p[6]));
+  root.style.setProperty("--palette-selection", resolveColor(scheme.selectionBg, p, p[8]));
   for (let i = 0; i <= 15; i++) {
     root.style.setProperty(`--palette-${i}`, p[i]);
   }
@@ -193,11 +213,20 @@ export function applyTheme(themeName: string): ColorScheme {
 const colorKeyToCssVar: Record<keyof ColorSettings, string> = {
   bgPrimary: "--theme-bg-primary",
   bgSecondary: "--theme-bg-secondary",
+  bgSurface: "--theme-bg-surface",
   textPrimary: "--theme-text-primary",
+  textSecondary: "--theme-text-secondary",
   accent: "--theme-accent",
+  accentSubtle: "--theme-accent-subtle",
+  border: "--theme-border",
   danger: "--theme-danger",
+  dangerStrong: "--theme-danger-strong",
+  onAccent: "--theme-on-accent",
+  hoverOverlay: "--theme-hover-overlay",
   hoverBg: "--theme-hover-bg",
-  // ...
+  hoverFg: "--theme-hover-fg",
+  selection: "--theme-selection",
+  cursor: "--theme-cursor",
 };
 ```
 
@@ -223,15 +252,36 @@ export function toXtermTheme(scheme: ColorScheme) {
   return {
     background: resolveColor(scheme.background, p, p[0]),
     foreground: resolveColor(scheme.foreground, p, p[15]),
+    cursor: resolveColor(scheme.cursor, p, p[6]),
     black: p[0],
     red: p[1],
     green: p[2],
-    // ...全16 ANSI カラー
+    yellow: p[3],
+    blue: p[4],
+    // ...all 16 ANSI colors
   };
 }
 ```
 
 カスタム DOM イベント（`zudotext:scheme-changed`）がスキーム変更時にターミナルコンポーネントに通知し、xterm テーマを再適用できるようにする。
+
+## カラーユーティリティ関数
+
+パッケージにはカラー操作のユーティリティが含まれている。
+
+```ts
+// Mix two hex colors at a given ratio
+colorMix("#ff0000", "#0000ff", 0.5) // -> purple
+
+// Blend foreground over background with alpha
+colorMixAlpha(fg, 0.1, bg) // -> 10% fg over bg
+
+// HSL conversion for programmatic color manipulation
+hexToHsl("#1C1C1C") // -> { h: 0, s: 0, l: 11 }
+
+// Determine readable text color for a background
+contrastTextColor("#1C1C1C") // -> "#ffffff"
+```
 
 ## まとめ
 
