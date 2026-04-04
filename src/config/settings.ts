@@ -23,7 +23,7 @@ export const settings = {
     darkScheme: "Default Dark",
     respectPrefersColorScheme: true,
   } satisfies ColorModeConfig,
-  siteName: "zudo-tauri",
+  siteName: "zudo-tauri-wisdom",
   siteDescription: "Takazudo's Tauri dev notes for me and AI agents" as string,
   base: "/pj/zudo-tauri",
   trailingSlash: false as boolean,
