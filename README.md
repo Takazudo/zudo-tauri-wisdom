@@ -1,4 +1,4 @@
-# zudo-tauri
+# zudo-tauri-wisdom
 
 Takazudo's personal Tauri v2 dev notes. Not official Tauri documentation.
 

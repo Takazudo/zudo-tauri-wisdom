@@ -1,4 +1,4 @@
-# zudo-tauri
+# zudo-tauri-wisdom
 
 Takazudo's Tauri v2 dev notes, built with zudo-doc (Astro, MDX, Tailwind CSS v4).
 

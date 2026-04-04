@@ -121,13 +121,13 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           if [ "$DEPLOY_RESULT" = "success" ]; then
-            STATUS="zudo-tauri deploy succeeded!"
+            STATUS="zudo-tauri-wisdom deploy succeeded!"
           elif [ "$BUILD_SITE_RESULT" = "failure" ]; then
-            STATUS="zudo-tauri deploy failed (site build)"
+            STATUS="zudo-tauri-wisdom deploy failed (site build)"
           elif [ "$DEPLOY_RESULT" = "failure" ]; then
-            STATUS="zudo-tauri deploy failed (deploy)"
+            STATUS="zudo-tauri-wisdom deploy failed (deploy)"
           else
-            STATUS="zudo-tauri deploy cancelled"
+            STATUS="zudo-tauri-wisdom deploy cancelled"
           fi
 
           COMMIT_MSG=$(echo "$RAW_COMMIT_MSG" | head -1 | sed 's/"/\\"/g')
