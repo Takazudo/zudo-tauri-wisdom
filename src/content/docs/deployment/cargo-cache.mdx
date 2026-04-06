@@ -147,6 +147,57 @@ stat -f "%Sm" dist-renderer/index.html
 
 The binary timestamp should be **after** the frontend build timestamp. If the binary is older, Cargo did not recompile.
 
+## Build Timestamp in the Frontend
+
+The most reliable way to verify a build is fresh is to embed a build timestamp directly in the frontend UI -- for example, in the app's settings dialog. This gives you an instant visual check without needing to grep JS bundles or run `stat`.
+
+### Injecting the Timestamp via Vite
+
+Use Vite's `define` option to inject a build timestamp at compile time:
+
+```typescript
+// vite-shared.ts (or vite.config.ts)
+export const buildDefines = {
+  __BUILD_TIMESTAMP__: JSON.stringify(new Date().toISOString()),
+};
+```
+
+```typescript
+// vite.config.ts
+import { buildDefines } from "./vite-shared";
+
+export default defineConfig({
+  define: buildDefines,
+  // ...
+});
+```
+
+### Declaring the Global Type
+
+Add a type declaration so TypeScript knows about the injected global:
+
+```typescript
+// globals.d.ts
+declare const __BUILD_TIMESTAMP__: string;
+```
+
+### Displaying in the App
+
+Show the timestamp in a settings dialog or about screen:
+
+```tsx
+// settings-dialog.tsx
+<p className="text-muted">build: {__BUILD_TIMESTAMP__}</p>
+```
+
+At build time, Vite replaces `__BUILD_TIMESTAMP__` with the literal string `"2026-04-06T10:17:18.054Z"`, so it is baked into the JS bundle. If the app shows an old timestamp after a rebuild, the build contains stale frontend code -- go back and apply the `build.rs` fix or `cargo clean -p`.
+
+<Tip>
+
+This approach works with any Vite `define` -- you can also inject git commit hashes, version numbers, or environment names the same way.
+
+</Tip>
+
 ## Automation
 
 To avoid ever shipping stale assets, add verification to your deploy script:

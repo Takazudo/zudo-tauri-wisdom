@@ -147,6 +147,57 @@ stat -f "%Sm" dist-renderer/index.html
 
 バイナリのタイムスタンプはフロントエンドビルドのタイムスタンプ**より後**であるべきである。バイナリの方が古い場合、Cargo は再コンパイルしていない。
 
+## フロントエンドにビルドタイムスタンプを表示する
+
+ビルドが最新であることを確認する最も確実な方法は、フロントエンドの UI にビルドタイムスタンプを直接埋め込むことである。たとえばアプリの設定ダイアログに表示すれば、JS バンドルを grep したり `stat` を実行したりせずに、一目で確認できる。
+
+### Vite でタイムスタンプを注入する
+
+Vite の `define` オプションを使用して、コンパイル時にビルドタイムスタンプを注入する：
+
+```typescript
+// vite-shared.ts (or vite.config.ts)
+export const buildDefines = {
+  __BUILD_TIMESTAMP__: JSON.stringify(new Date().toISOString()),
+};
+```
+
+```typescript
+// vite.config.ts
+import { buildDefines } from "./vite-shared";
+
+export default defineConfig({
+  define: buildDefines,
+  // ...
+});
+```
+
+### グローバル型の宣言
+
+TypeScript が注入されたグローバル変数を認識できるよう、型宣言を追加する：
+
+```typescript
+// globals.d.ts
+declare const __BUILD_TIMESTAMP__: string;
+```
+
+### アプリ内での表示
+
+設定ダイアログや About 画面にタイムスタンプを表示する：
+
+```tsx
+// settings-dialog.tsx
+<p className="text-muted">build: {__BUILD_TIMESTAMP__}</p>
+```
+
+ビルド時に Vite が `__BUILD_TIMESTAMP__` をリテラル文字列 `"2026-04-06T10:17:18.054Z"` に置換するため、JS バンドルに直接埋め込まれる。リビルド後にアプリが古いタイムスタンプを表示している場合、そのビルドには古いフロントエンドコードが含まれている。`build.rs` の修正または `cargo clean -p` を適用すること。
+
+<Tip>
+
+このアプローチは任意の Vite `define` で使用できる。同様の方法で git コミットハッシュ、バージョン番号、環境名なども注入可能である。
+
+</Tip>
+
 ## 自動化
 
 古いアセットを含むビルドをデプロイしてしまうことを防ぐため、デプロイスクリプトに検証を追加する。
