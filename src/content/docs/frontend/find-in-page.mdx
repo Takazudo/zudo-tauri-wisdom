@@ -212,6 +212,12 @@ export function createFindInPage(): FindInPage {
 This approach only matches text within a single DOM text node. If a word is split across elements (e.g., `<em>hel</em>lo`), it will not match "hello". This is acceptable for most content scenarios.
 :::
 
+<Note>
+
+`NodeFilter.SHOW_TEXT` collects text nodes from all elements, including `<script>` and `<style>` tags if they are inside the container. Scope your container selector to a content element (e.g., `article.main-content`) rather than `document.body` to avoid accidentally wrapping script/style text in `<mark>` elements.
+
+</Note>
+
 ## Find bar UI component
 
 The find bar is a floating React component that renders at the top-right of the viewport when active.
@@ -348,7 +354,7 @@ if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
 
 <Note>
 
-`__TAURI_INTERNALS__` is an internal Tauri implementation detail. It has been stable in practice across Tauri v2 releases, but it is not part of the public API. If you need a more official check, Tauri's `@tauri-apps/api/core` package exposes `isTauri()` in v2.4+ as a proper public alternative.
+`__TAURI_INTERNALS__` is an internal Tauri implementation detail. It has been stable in practice across Tauri v2 releases, but it is not part of the public API. If you need a more official check, Tauri's `@tauri-apps/api/core` package exposes `isTauri()` in recent Tauri v2 releases as a proper public alternative.
 
 </Note>
 
@@ -413,7 +419,7 @@ export default function FindInPageInit() {
 
 ### Key design decisions
 
-- **`useRef` for the find-in-page instance** -- the utility maintains internal state (match list, active index). Using `useRef` ensures one instance persists across re-renders without triggering unnecessary updates.
+- **`useRef` for the find-in-page instance** -- the utility maintains internal state (match list, active index). Using `useRef` ensures one instance persists across re-renders without triggering unnecessary updates. Note that `useRef(createFindInPage())` calls the factory on every render (React only uses the initial value); for a clean lazy-init, use `useRef<FindInPage | null>(null)` and initialize inside a `useEffect`.
 - **`containerSelector` prop** -- scoping search to a specific element (e.g., `article.zd-content`) prevents matching text in the navigation, header, or find bar itself.
 - **Toggle behavior** -- Ctrl+F toggles the find bar open/closed rather than just opening it, so users can dismiss it with the same shortcut.
 - **No debounce by default** -- `handleFind` runs the full DOM tree walk on every keystroke. For most doc sites this is fast enough, but on very large pages (thousands of DOM nodes) you may want to add a debounce (e.g., 100–150ms) around the `findInPage.find()` call.

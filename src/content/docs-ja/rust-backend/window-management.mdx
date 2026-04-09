@@ -459,7 +459,7 @@ flowchart TD
 3. **ローディングページには `data:` URL を使用する** -- バンドルされた HTML ファイルは不要（ただし `webview-data-url` feature flag が必要）
 4. **TCP 接続で開発サーバーをポーリングする** -- HTTP リクエストより高速
 5. **子プロセスはウィンドウ破棄時に必ずクリーンアップする**
-6. **`on_navigation` でリンクの動作を制御する** -- 外部リンクはデフォルトブラウザで開く
+6. **`on_navigation` でリンクの動作を制御する** -- 外部リンクはデフォルトブラウザで開く。フロントエンドからのプログラマティックな URL 開封には `tauri-plugin-opener` を使用する
 7. **プラットフォーム固有のコード** は `#[cfg(target_os = "macos")]` ガードの背後に配置する
 
 <Warning>
@@ -467,3 +467,7 @@ flowchart TD
 `tauri-plugin-window-state` を使用する場合、起動時に永続化された `VISIBLE` 状態が復元される可能性があり、非表示→表示パターンと競合する。表示フラグの永続化を明示的に除外するか、プラグインがコードの準備ができる前にウィンドウを表示してしまう。
 
 </Warning>
+
+## 関連ページ
+
+- [Find-in-Page](../frontend/find-in-page.mdx) -- カスタム実装が必要な別の WebView の動作：Tauri はブラウザのネイティブな Ctrl+F 検索ダイアログを公開していない

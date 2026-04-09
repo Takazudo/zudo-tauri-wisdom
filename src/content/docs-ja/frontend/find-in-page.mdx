@@ -212,6 +212,12 @@ export function createFindInPage(): FindInPage {
 このアプローチは単一の DOM テキストノード内のテキストのみマッチする。単語が要素をまたいで分割されている場合（例：`<em>hel</em>lo`）、"hello" にはマッチしない。ほとんどのコンテンツシナリオではこの制限は問題にならない。
 :::
 
+<Note>
+
+`NodeFilter.SHOW_TEXT` はコンテナ内の `<script>` や `<style>` タグのテキストノードも収集する。`<mark>` 要素がスクリプトやスタイルのテキストをラップしてしまうのを避けるため、コンテナセレクターは `document.body` ではなくコンテンツ要素（例：`article.main-content`）にスコープする。
+
+</Note>
+
 ## 検索バー UI コンポーネント
 
 検索バーはアクティブ時にビューポートの右上に表示されるフローティング React コンポーネントである。
@@ -348,7 +354,7 @@ if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
 
 <Note>
 
-`__TAURI_INTERNALS__` は Tauri の内部実装の詳細である。Tauri v2 のリリース間で事実上安定しているが、パブリック API の一部ではない。より公式なチェックが必要な場合は、Tauri v2.4+ の `@tauri-apps/api/core` パッケージが公式のパブリック代替として `isTauri()` を提供している。
+`__TAURI_INTERNALS__` は Tauri の内部実装の詳細である。Tauri v2 のリリース間で事実上安定しているが、パブリック API の一部ではない。より公式なチェックが必要な場合は、最近の Tauri v2 リリースの `@tauri-apps/api/core` パッケージが公式のパブリック代替として `isTauri()` を提供している。
 
 </Note>
 
@@ -413,7 +419,7 @@ export default function FindInPageInit() {
 
 ### 主な設計上の判断
 
-- **find-in-page インスタンスに `useRef`** -- ユーティリティは内部状態（マッチリスト、アクティブインデックス）を保持する。`useRef` を使用することで、不要な再レンダリングを引き起こさずに 1 つのインスタンスが再レンダリング間で永続化される。
+- **find-in-page インスタンスに `useRef`** -- ユーティリティは内部状態（マッチリスト、アクティブインデックス）を保持する。`useRef` を使用することで、不要な再レンダリングを引き起こさずに 1 つのインスタンスが再レンダリング間で永続化される。なお `useRef(createFindInPage())` はレンダリングごとにファクトリ関数を呼び出す（React は初回値のみ使用）。完全なレイジーイニシャライズが必要な場合は `useRef<FindInPage | null>(null)` で初期化し、`useEffect` 内でインスタンスを作成する。
 - **`containerSelector` prop** -- 検索を特定の要素（例：`article.zd-content`）にスコープすることで、ナビゲーション、ヘッダー、検索バー自体のテキストとのマッチを防止する。
 - **トグル動作** -- Ctrl+F は検索バーを開くだけでなく開閉をトグルするため、ユーザーは同じショートカットで閉じることもできる。
 - **デフォルトではデバウンスなし** -- `handleFind` はキーストロークごとに DOM ツリー走査全体を実行する。ほとんどのドキュメントサイトでは十分に高速だが、非常に大きなページ（数千の DOM ノード）では `findInPage.find()` の呼び出しにデバウンス（例：100〜150ms）を追加することを検討する。

@@ -459,7 +459,7 @@ flowchart TD
 3. **Use `data:` URLs for loading pages** -- no need for bundled HTML files (but note the `webview-data-url` feature flag requirement)
 4. **Poll dev server with TCP connect** -- faster than HTTP requests
 5. **Always clean up child processes** on window destroy
-6. **Use `on_navigation` to control link behavior** -- open external links in the default browser
+6. **Use `on_navigation` to control link behavior** -- open external links in the default browser; use `tauri-plugin-opener` for programmatic URL opening from the frontend
 7. **Platform-specific code** goes behind `#[cfg(target_os = "macos")]` guards
 
 <Warning>
@@ -467,3 +467,7 @@ flowchart TD
 If you use `tauri-plugin-window-state`, it may restore the persisted `VISIBLE` state on launch, which fights with the hidden-then-show pattern. You need to explicitly exclude the visibility flag from being persisted, or the plugin will show the window before your code is ready to display content.
 
 </Warning>
+
+## Related
+
+- [Find-in-Page](../frontend/find-in-page.mdx) -- another webview behavior that needs custom implementation: Tauri does not expose the browser's native Ctrl+F find dialog
