@@ -282,7 +282,16 @@ This only affects the current process. It does not change the system-wide settin
 
 ## External link handling
 
-The `on_navigation` callback controls which URLs the webview is allowed to load. Use it to open external links in the default browser:
+A Tauri webview behaves like an embedded browser -- when a user clicks an `<a href="https://example.com">` link, the webview navigates to that URL in-place, replacing your app's UI. This is the natural default, but in most apps you want external links to open in the OS default browser instead.
+
+There are two complementary approaches:
+
+1. **Rust-side `on_navigation` callback** -- intercepts all top-level navigations before they happen. Best as a catch-all safety net.
+2. **Frontend-side `tauri-plugin-opener`** -- lets you programmatically open URLs from JavaScript. Best for explicit "open in browser" actions.
+
+### Rust: `on_navigation` callback
+
+The `on_navigation` callback controls which URLs the webview is allowed to load. Return `true` to allow the navigation, `false` to block it. For external URLs, open them in the default browser before returning `false`:
 
 ```rust
 .on_navigation(move |url: &tauri::Url| {
@@ -314,11 +323,65 @@ The `on_navigation` callback controls which URLs the webview is allowed to load.
 })
 ```
 
+This uses the `open` crate (`open::that()`) to launch the OS default browser. Add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+open = "5"
+```
+
 <Warning>
 
 Always block `javascript:` and `file:` schemes. Allowing them opens security vulnerabilities in the webview.
 
 </Warning>
+
+<Note>
+
+`on_navigation` only fires for top-level navigations (clicking links, `window.location` changes). It does not intercept `fetch()` requests, `XMLHttpRequest`, or iframe navigations. For those, use Tauri's security scope and CSP settings.
+
+</Note>
+
+### Frontend: `tauri-plugin-opener`
+
+For cases where you want to open a URL from JavaScript -- for example, a button click handler or a dynamically generated link -- use the official `tauri-plugin-opener`:
+
+```bash
+# Install the Rust crate and the frontend JS package
+cargo add tauri-plugin-opener
+pnpm add @tauri-apps/plugin-opener
+```
+
+Register it in your Tauri builder:
+
+```rust
+tauri::Builder::default()
+    .plugin(tauri_plugin_opener::init())
+    // ...
+```
+
+Add the permission in your capability file:
+
+```json
+{
+  "permissions": ["opener:default"]
+}
+```
+
+Then call it from the frontend:
+
+```typescript
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+// Open a URL in the OS default browser
+await openUrl("https://example.com");
+```
+
+<Tip>
+
+Use both approaches together: `on_navigation` as the Rust-side safety net that catches all link clicks, and `tauri-plugin-opener` for explicit frontend actions like "Open in browser" buttons. The `on_navigation` callback ensures no external URL ever accidentally loads inside the webview, even if you miss a link somewhere in your frontend code.
+
+</Tip>
 
 ## Window destroy event handling
 
