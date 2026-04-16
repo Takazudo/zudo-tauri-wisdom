@@ -1,0 +1,61 @@
+---
+title: Tauri Mobile (iOS)
+description: Tauri v2 を使って Web フロントエンドをネイティブ iOS アプリとしてラップする
+sidebar_position: 1
+---
+
+## Tauri Mobile とは
+
+Tauri v2（2024 年 10 月 2 日に安定版リリース）では、既存のデスクトップターゲットに加えて iOS と Android のファーストクラスなターゲットが追加された。iOS における Tauri アプリは、システムの `WKWebView` を埋め込み、フロントエンドアセットを読み込む薄い Swift シェルである。Rust バックエンドは静的ライブラリとしてコンパイルされ、FFI 経由で Swift から呼び出される。フロントエンドから見ると、`@tauri-apps/api` 経由で Rust へ IPC できる点を除けばブラウザのように感じられる。
+
+実際のところ、すでにデスクトップで動作している Vite + React の Web アプリをモバイル化するときのストーリーは「既存の `frontendDist` をそのまま Tauri に指さして、iOS アプリとして出荷する」というものになる。
+
+## 安定性の現状
+
+- **デスクトップ（macOS/Windows/Linux）** -- 安定、プロダクション品質
+- **iOS と Android** -- v2.0.0 で API は安定したが、すべてのデスクトッププラグインがモバイルで使えるわけではない。Tauri チームは「2.0 は『モバイルがファーストクラスシチズンになるリリース』ではない」と明言している。あくまで堅実な土台であり、完成形ではない
+- **iOS エコシステム** -- dialog、fs、notification、geolocation、haptics などのプラグインは存在する。macOS API に深く食い込むプラグイン（windowing、menubar、dock 系）は当然使えない
+
+<Info>
+
+動作している Vite + React Web アプリがあり、それを iOS に載せたいだけであれば、Tauri Mobile は有力な選択肢である。ただしネイティブ iOS との深い統合（ウィジェット、App Intents、アプリ内 SwiftUI ビューなど）が必要なら、別のスタックを検討したほうが良い。
+
+</Info>
+
+## なぜ Capacitor や React Native ではなく Tauri なのか
+
+| 観点                     | Tauri Mobile                              | Capacitor                            | React Native                          |
+| ------------------------ | ----------------------------------------- | ------------------------------------ | ------------------------------------- |
+| UI レイヤー              | システム WebView（iOS では WKWebView）     | システム WebView（iOS では WKWebView） | JS から橋渡しされるネイティブビュー    |
+| バックエンド言語          | Rust（デスクトップと共通）                | TypeScript + Swift プラグイン         | JavaScript + Objective-C/Swift ブリッジ |
+| バンドルサイズ（iOS）     | 小（Rust は小さくコンパイルされる、システム WebView 利用） | 小（システム WebView）          | 中（JS ランタイムとブリッジを同梱）    |
+| メモリフットプリント      | 低                                         | 中                                   | 中から高                              |
+| フロントエンドフレームワーク制約 | なし（好きな Vite/webpack セットアップ） | なし                                 | React のみ                            |
+| デスクトップとの親和性   | 高い（Rust バックエンドを共用）           | 弱い（Electron 系は別口）            | 弱い（React Native for Windows/macOS の状況は様々） |
+| ネイティブ API の到達度 | 成長中、Rust プラグインのみ               | 広大なプラグインエコシステム、追加も容易 | 三者で最大のネイティブエコシステム    |
+| iOS 上での成熟度         | 安定版から 1 年超                          | 長期間                                 | 長期間                                |
+
+率直にまとめるとこうなる。
+
+- **Tauri を選ぶ** -- すでに Tauri デスクトップアプリがあり、デスクトップとモバイルで一貫したコードベースを維持したい場合
+- **Capacitor を選ぶ** -- Web ファースト・モバイルファーストのアプリで、多くのネイティブプラグインが必要、デスクトップは「あれば良い」程度の場合
+- **React Native を選ぶ** -- モバイルでリッチなネイティブ UI パフォーマンスが必要で、Web 版を書き直す覚悟がある場合
+
+## このカテゴリでカバーする内容
+
+これらのノートは、既存の Vite + React Web アプリをラップする視点から iOS にフォーカスしている。
+
+- [iOS 前提条件](./ios-prerequisites.mdx) -- Xcode、Rust iOS ターゲット、CocoaPods、Apple ID、Developer Mode
+- [iOS プロジェクト構成](./ios-project-structure.mdx) -- `cargo tauri ios init` が生成するもの、`gen/apple/` ディレクトリ、`Info.ios.plist`、`bundle.iOS` 設定フィールド
+- [iOS 開発ループ](./ios-dev-loop.mdx) -- シミュレーター、実機、`TAURI_DEV_HOST`、Vite 設定、ATS、Safari Web Inspector
+- [無料 Personal Team での署名](./ios-signing-free-team.mdx) -- 7 日プロビジョニングプロファイル、使えない capabilities、有料プログラムへのアップグレードパス
+- [iOS の WKWebView ハマりどころ](./wkwebview-gotchas.mdx) -- safe-area-inset、キーボード、スクロール、Service Worker、Cookie
+- [App Store Review 4.2](./app-store-review-4-2.mdx) -- WebView ラッパーアプリがリジェクトされる理由と、通すために必要なネイティブ面
+
+## 公式ドキュメント
+
+- [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)
+- [Tauri Develop](https://v2.tauri.app/develop/)
+- [iOS Code Signing](https://v2.tauri.app/distribute/sign/ios/)
+- [App Store への提出](https://v2.tauri.app/distribute/app-store/)
+- [Tauri Configuration Reference](https://v2.tauri.app/reference/config/)

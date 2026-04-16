@@ -1,0 +1,233 @@
+---
+title: iOS の WKWebView ハマりどころ
+description: safe-area インセット、キーボード挙動、position fixed、Service Worker、Cookie など WKWebView のクセ
+sidebar_position: 6
+---
+
+Tauri iOS アプリは `WKWebView` を Swift シェルでくるんだものである。`WKWebView` は Safari ではないし、Tauri for Windows で使われる WebView2 でもない。このページは、Vite + React Web アプリを iOS に移植したときに噛み付きやすい Web プラットフォームのクセを並べたリストである。
+
+## Safe-Area インセット
+
+ノッチや Dynamic Island のある iPhone では、ステータスバー、ホームインジケータ、左右の切り欠きの下に描画しないよう CSS で逃がす必要がある。
+
+### `viewport-fit=cover` を宣言
+
+`index.html` に:
+
+```html
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1, viewport-fit=cover"
+/>
+```
+
+`viewport-fit=cover` がないと `env(safe-area-inset-*)` は全辺 `0` を返し、上下にレターボックス的な帯が出る。
+
+### `env(safe-area-inset-*)` を使う
+
+```css
+.app-header {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.app-footer {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+```
+
+### 既知の WKWebView バグ: 初回描画でインセットが未設定
+
+[WebKit bug 191872](https://bugs.webkit.org/show_bug.cgi?id=191872): `env(safe-area-inset-*)` の値はページ読み込み直後には設定されておらず、しばらく経ってから入ることがある。初期レイアウトがこれらの値に依存していると、誤ったレイアウトが一瞬ちらつく。
+
+回避策:
+
+- `min-height` / `min-padding` フォールバック: `padding-top: max(env(safe-area-inset-top), 20px)`
+- ちょっと遅らせて再レイアウト: `requestAnimationFrame` を 2 回呼ぶ程度で通常は十分
+- ちらつきを受け入れ、フォールバックが許容できる見た目になるようデザインする
+
+### 回転バグ
+
+デバイス回転後に safe-area 値が正しく更新されないことがある。portrait > landscape > portrait と切り替えると、`env(safe-area-inset-top)` が `0` のまま固まり、次のレイアウトパスまで戻らないことがある。アプリが回転をサポートするなら（iPhone では通常サポートしないほうが良い）明示的にテストすること。
+
+## キーボードと viewport リサイズ
+
+オンスクリーンキーボードが出たときの WKWebView の挙動はデスクトップ Safari と違う。
+
+### viewport はリサイズされない
+
+キーボードが開いても `window.innerHeight` は**縮まない**。WebView のコンテンツサイズはそのままで、下部をキーボードが覆う形になる。`position: fixed` の下部バーはキーボードの下に隠れてしまう。
+
+### Visual Viewport API を使う
+
+`visualViewport` API で可視領域を取得する:
+
+```ts
+const handleViewportChange = () => {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty(
+    "--keyboard-inset",
+    `${window.innerHeight - vv.height - vv.offsetTop}px`
+  );
+};
+window.visualViewport?.addEventListener("resize", handleViewportChange);
+window.visualViewport?.addEventListener("scroll", handleViewportChange);
+```
+
+CSS 側:
+
+```css
+.bottom-toolbar {
+  position: fixed;
+  bottom: calc(var(--keyboard-inset, 0px) + env(safe-area-inset-bottom));
+}
+```
+
+### 入力フォーカスでのスクロールジャンプ
+
+ページ下部の input にフォーカスが当たると、WKWebView は自動でその input を画面内にスクロールさせる。ターゲットがズレて、input が画面外に飛んだりキーボードの下に潜り込んだりすることがある。
+
+緩和策:
+
+- `scroll-margin-bottom` を input に付ける: `input { scroll-margin-bottom: 100px; }`
+- フォーカスで手動スクロール: `input.scrollIntoView({ block: "center" })`
+- フォームの周囲に `overflow: hidden` の `position: fixed` を置かない -- ネストしたスクロールコンテキストで WKWebView の scroll-into-view ロジックが混乱する
+
+### キーボードを閉じた後に viewport がズレる
+
+一部の iOS バージョン（iOS 12 など、以後も何度か回帰している）で、キーボードを閉じた直後に WKWebView のコンテンツがキーボード高さぶんオフセットされたままになることがある。ページを少しスクロールすれば直るが、ユーザーが気づくまでの数百ミリ秒は壊れて見える。
+
+これに遭遇したら、キーボードを閉じた後にレイアウトを強制する:
+
+```ts
+input.addEventListener("blur", () => {
+  requestAnimationFrame(() => window.scrollTo(0, window.scrollY));
+});
+```
+
+## スクロールコンテンツ中の `position: fixed`
+
+`position: fixed` 要素は慣性スクロール中にちらついたり、意図しない位置にズレたりする。これは WKWebView では昔からの定番挙動である。
+
+緩和策:
+
+- `transform: translateZ(0)` や `will-change: transform` を付けて独立した合成レイヤーを強制する
+- スクロール可能コンテナの中に fixed を置かない。`body` 直下に置く
+- 意味的に許されるなら `position: sticky` を検討 -- 多くの fixed 系エッジケースを避けられる
+
+## Service Worker はほぼ使えない
+
+`WKWebView` はデフォルトではアプリ埋め込みの Web コンテンツに対して Service Worker を動かさない。Service Worker が動くのは:
+
+- Safari
+- Web Browser entitlement を持つアプリ（サードパーティには付与されない Apple 内部 entitlement）
+- `WKWebViewConfiguration` で `limitsNavigationsToAppBoundDomains = true` を設定し、`Info.plist` の `WKAppBoundDomains` にドメインを列挙したアプリ
+
+Tauri は現在のところ App-Bound Domains モードを自動で切り替えないため、Service Worker は動かないと見なして良い。
+
+### 含意
+
+- Service Worker ベースのオフラインサポートはできない
+- Background sync もできない
+- Push API 経由の push もできない（有料チームなら Tauri プラグイン経由で APNs を使う）
+
+### 代わりに使えるもの
+
+- **Web Worker** -- 通常の worker スレッドは WKWebView で問題なく動く
+- **IndexedDB** / **LocalStorage** -- 使える。Safari 本体よりクォータが厳しめ
+- **Cache API** -- 使えるが、populate する Service Worker がないので価値は限定的
+- **fetch の HTTP キャッシュ** -- 通常のブラウザキャッシュは効く
+
+## Cookie と `localhost` vs LAN
+
+開発中、フロントエンドは `http://<LAN-IP>:1420` から読み込まれる。アプリがセットする Cookie は同オリジンに付く。バックエンドも LAN IP 上にあれば問題ない。別オリジンなら通常のブラウザと同じく CORS が効く。
+
+Tauri WebView からのクロスオリジンリクエストは通常のブラウザ CORS ルールに従う -- "Tauri が CORS をバイパスする" モードは存在しない。`fetch` に `credentials: "include"` を付け、バックエンドで `Access-Control-Allow-Origin` + `Access-Control-Allow-Credentials` を返す。ブラウザと同じ話である。
+
+<Warning>
+
+dev サーバの IP を変更すると Cookie のオリジンも変わる。Wi-Fi を切り替えて LAN IP が変わると、前の IP でのログインセッションは引き継がれない。
+
+</Warning>
+
+## PWA 機能はほぼ無意味
+
+元の Web アプリが PWA でも、Tauri シェルの中では PWA 固有機能のほとんどが意味を失う:
+
+- **Web App Manifest** -- Tauri は manifest からインストールしない。インストールの主体は iOS バンドルそのもの
+- **`beforeinstallprompt`** -- WKWebView では発火しない
+- **`display-mode: standalone`** -- 適用されない。WebView は常にほぼフルスクリーン
+- **Web Push** -- Service Worker の制限でブロック
+
+アプリ内で「アプリをインストール！」のバナーが出ないよう、これらの機能は優雅に無効化しておくこと。
+
+## CSS `filter` のパフォーマンス
+
+WKWebView は広い面での `filter: blur()` 合成が比較的遅い。全画面の `backdrop-filter: blur(20px)` は古い iPhone でフレームレートを明確に落とす。
+
+緩和策:
+
+- blur 半径を下げる
+- できる限り blur 済みの画像として事前レンダリングする
+- filter 値をアニメーションさせない。静的な filter 値なら問題ない
+
+## スクロールバウンス / ラバーバンド
+
+デフォルトで WebView は iOS のラバーバンド効果付きでスクロールする。ラッパーアプリでは多くの場合これが違和感を生む。
+
+### 案 1: Rust 側で無効化
+
+Tauri の `WebviewWindowBuilder` コールバックから下位 `UIScrollView` の `bounces = false` にする（Tauri iOS プラグインの事情は流動的なので API を要確認）。
+
+### 案 2: CSS で抑制
+
+```css
+html,
+body {
+  overscroll-behavior: none;
+  height: 100%;
+  overflow: hidden;
+}
+#app {
+  height: 100%;
+  overflow: auto;
+}
+```
+
+`html` / `body` の `overscroll-behavior: none` で外側のバウンスを止める。内側のスクロールコンテナは自前のバウンス挙動を持つ。多くの場合これで自然に感じられる。
+
+## input タイプの挙動
+
+- `<input type="number">` は数字キーパッドを出すが、WKWebView の一部古いバージョンでは非数字の入力も受け付けてしまう
+- `<input type="date">` / `type="datetime-local">` はネイティブの iOS ホイールピッカーを出す -- デスクトップの date ピッカーとは挙動が違う
+- `<input type="file">` は iOS のファイル / カメラ / 写真ピッカーを呼ぶ。`Info.ios.plist` に `NSPhotoLibraryUsageDescription`（カメラ選択肢があるなら `NSCameraUsageDescription` も）が必要
+
+## タップ遅延と `:hover`
+
+モダンな iOS では 300ms タップ遅延はかなり改善されているが、`:hover` 状態はタップ後も別の場所をタップするまで残り続ける。即時の視覚フィードバックは `:active` で出し、`:hover` だけに依存する表現は控えめにする。
+
+## テストマトリクス
+
+いくつかはシミュレーターでは現れず実機で初めて出るので、両方で明示的に確認する:
+
+- [ ] ノッチ付き iPhone で safe-area インセットが正しく描画される
+- [ ] キーボードの開閉でフローティング要素が残らない
+- [ ] 画面下部の input にフォーカスしてもコンテンツが画面外に押し出されない
+- [ ] スクロールバウンスが意図通り、偶発的でなく見える
+- [ ] タップフィードバックが 100ms 以内に現れる
+- [ ] 回転で safe-area インセットが壊れた値で固まらない（回転サポート時のみ）
+- [ ] ダークモードがネイティブ UI と合う（`prefers-color-scheme: dark`）
+
+## 関連ページ
+
+- カメラ / 写真権限を `Info.ios.plist` で宣言する方法は [iOS プロジェクト構成](./ios-project-structure.mdx#infoiosplist-%E8%BF%BD%E5%8A%A0%E3%82%AD%E3%83%BC%E3%81%AE%E3%83%9E%E3%83%BC%E3%82%B8)
+- "ほぼ Web ページに見える" ことがリジェクトリスクになる話は [App Store Review 4.2](./app-store-review-4-2.mdx)
+
+## 外部リファレンス
+
+- [WebKit bug 191872: safe-area-inset not set on load](https://bugs.webkit.org/show_bug.cgi?id=191872)
+- [WebKit bug 192564: keyboard dismissal leaves viewport shifted](https://bugs.webkit.org/show_bug.cgi?id=192564)
+- [WebKit bug 206741: service worker support in WKWebView](https://bugs.webkit.org/show_bug.cgi?id=206741)
+- [Apple: WKWebViewConfiguration.limitsNavigationsToAppBoundDomains](https://developer.apple.com/documentation/webkit/wkwebviewconfiguration/3585117-limitsnavigationstoappbounddomai)

@@ -1,0 +1,197 @@
+---
+title: iOS 前提条件
+description: Tauri v2 iOS 開発のための Xcode、Rust ターゲット、CocoaPods、Apple ID セットアップ
+sidebar_position: 2
+---
+
+このページの内容はすべて開発マシンごとに 1 回だけ実施すれば良いセットアップである。いずれかを飛ばすと、後で `cargo tauri ios init` や `cargo tauri ios dev` が分かりにくい形で壊れる。
+
+## macOS が必須
+
+iOS 開発は macOS 専用である。Linux や Windows では Tauri を使っても iOS ビルドはできない。Apple のツールチェイン（`xcodebuild`、コード署名、シミュレーターランタイム）は macOS 向けにしか提供されていない。
+
+## フルの Xcode をインストール
+
+iOS ビルドには Command Line Tools だけでは**不十分**である。フル Xcode IDE が必要になる。
+
+1. Mac App Store または [developer.apple.com/xcode/resources](https://developer.apple.com/xcode/resources/) から Xcode をインストール
+2. 一度起動させてセットアップを完了させ、ライセンスに同意し、追加コンポーネントをインストールする
+3. CLI でライセンスに同意する:
+
+```bash
+sudo xcodebuild -license accept
+```
+
+<Warning>
+
+App Store からの Xcode ダウンロードは途中で止まることがある。その場合は Apple Developer サイトから直接 `.xip` を取得すると良い。`.xip` はどこかに保管しておくこと。Xcode のアップデートは遅く、たまに面倒なことになる。
+
+</Warning>
+
+## Xcode Command Line Tools をインストール
+
+フル Xcode があっても、`xcrun` などをシェルから使うためにスタンドアロンの CLT もインストールしておく:
+
+```bash
+xcode-select --install
+```
+
+確認:
+
+```bash
+xcode-select -p
+# 出力例: /Applications/Xcode.app/Contents/Developer
+```
+
+パスが別の場所を指している場合はリセットする:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
+## Homebrew のインストール（未導入の場合）
+
+以降ほぼすべての作業が Homebrew 経由のほうが楽になる:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+## CocoaPods のインストール
+
+Tauri の iOS ビルドは内部で CocoaPods を使って Rust 静的ライブラリを Xcode プロジェクトに組み込む。
+
+```bash
+brew install cocoapods
+```
+
+## Rust の iOS ターゲットを追加
+
+Tauri は Rust コードを 3 つの iOS 系ターゲット向けにコンパイルする。すべて追加する:
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+```
+
+| ターゲット              | 用途                                              |
+| ----------------------- | ------------------------------------------------- |
+| `aarch64-apple-ios`     | 実機の iPhone / iPad（ARM64）                     |
+| `aarch64-apple-ios-sim` | Apple Silicon Mac 上のシミュレーター（ARM64）     |
+| `x86_64-apple-ios`      | Intel Mac 上のシミュレーター（レガシーだが有用）  |
+
+<Note>
+
+Apple Silicon Mac では `x86_64-apple-ios` はほとんど不要だが、追加しても大したコストではないので将来の Intel Mac 上でのテストに備えて入れておくと良い。
+
+</Note>
+
+## Tauri CLI（v2）をインストール
+
+デスクトップで既に使っているどの経路でもよい:
+
+```bash
+# Rust ネイティブ
+cargo install tauri-cli --version "^2.0.0"
+
+# もしくは binstall（高速）
+cargo binstall tauri-cli
+
+# プロジェクトの npm 開発依存として
+pnpm add -D @tauri-apps/cli
+```
+
+確認:
+
+```bash
+cargo tauri --version
+# tauri-cli 2.x.y
+```
+
+## Apple ID と Apple Developer Program の違い
+
+ここが最も紛らわしいので明示しておく。
+
+| 経路                              | 費用         | できること                                                        | 制限                                                             |
+| --------------------------------- | ------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| 無料の Apple ID（Personal Team）  | 無料         | シミュレーターと自身の実機でアプリを実行                          | 7 日のプロビジョニングプロファイル、push/iCloud/App Groups なし、TestFlight 不可 |
+| Apple Developer Program           | 年 99 USD    | TestFlight、App Store、全 capabilities、1 年のプロビジョニング    | 毎年更新、本人確認が必要                                         |
+
+「自分の iPhone で試すために、Vite + React アプリを載せたい」だけなら無料の Apple ID で十分である。他人に渡すなら有料プログラムが必要になる。
+
+詳細とアップグレードパスは [無料 Personal Team での署名](./ios-signing-free-team.mdx) を参照。
+
+## Xcode に Apple ID を登録
+
+実機ビルドを試す前に、Xcode に Apple ID を登録しておく:
+
+1. Xcode を起動
+2. `Xcode` > `Settings` > `Accounts`
+3. 左下の `+` をクリックし Apple ID でサインイン
+4. 行が追加され、無料なら `Your Name (Personal Team)`、有料なら自分のチーム名が表示される
+
+この Team ID は後で `tauri.conf.json > bundle > iOS > developmentTeam` に指定する。
+
+## iPhone で Developer Mode を有効化
+
+iOS 16 以降、Apple はデフォルトで Developer Mode を隠している。自己署名や開発署名の Tauri ビルドを実機で動かすには Developer Mode を有効にする必要がある。
+
+1. iPhone を Mac にケーブル接続
+2. iPhone 側で `設定` > `プライバシーとセキュリティ` > `Developer Mode`（一度でも開発に使われたデバイスにしか表示されない）
+3. トグルをオンにし、プロンプトに従って再起動、パスコードで確認
+4. 初めて Mac に接続したときは `このコンピュータを信頼` をタップ
+
+<Info>
+
+`プライバシーとセキュリティ` に `Developer Mode` が表示されない場合は、先に Xcode（`Window` > `Devices and Simulators`）でデバイスを認識させ、Xcode にデバイスを準備させてから再度設定画面を確認する。Xcode がデバイスをプローブした後に項目が現れる。
+
+</Info>
+
+## クイック確認
+
+Tauri プロジェクトを始める前に、それぞれが単独で動作することを確認しておく:
+
+```bash
+# Xcode が正しい場所を指している
+xcode-select -p
+
+# Rust iOS ターゲットが入っている
+rustup target list --installed | grep apple-ios
+
+# Tauri CLI が動く
+cargo tauri --version
+
+# Cocoapods が使える
+pod --version
+
+# Apple ID が Xcode に登録されている
+# (Xcode > Settings > Accounts を目視で確認)
+```
+
+これらがすべて妥当な出力を返せば、[iOS プロジェクト構成](./ios-project-structure.mdx) に進める状態である。
+
+## よくあるハマりどころ
+
+### "No iOS SDK installed"
+
+Xcode はダウンロードしたが一度も起動していないパターン。1 回起動してライセンスに同意し、追加コンポーネントのインストールを完了させる。
+
+### `xcodebuild: error: SDK "iphoneos" cannot be located`
+
+`xcode-select` がフル Xcode ではなく Command Line Tools を指している:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
+### `cargo tauri ios init` が `pod: command not found` で失敗
+
+CocoaPods が未インストール、または `PATH` に入っていない。`brew install cocoapods` を実行し、新しいシェルを開いて再試行。
+
+### rustup ターゲット不足
+
+`cargo tauri ios build` が未知のターゲットだと文句を言う場合、ほぼ確実に `rustup target add` 不足である。上記 3 つの `rustup target add` を再実行する。
+
+## 公式ドキュメント
+
+- [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)
+- [Enabling Developer Mode on a Device (Apple)](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)

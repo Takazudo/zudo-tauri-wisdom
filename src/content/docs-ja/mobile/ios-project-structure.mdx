@@ -1,0 +1,200 @@
+---
+title: iOS プロジェクト構成
+description: cargo tauri ios init が生成するもの、gen/apple ディレクトリ、Info.ios.plist、bundle.iOS 設定
+sidebar_position: 3
+---
+
+このページでは、Tauri プロジェクトで iOS を有効にしたときに追加されるファイル、iOS 固有ファイルが置かれる場所、そして `tauri.conf.json` のどのフィールドが実際に Xcode の挙動を左右するかを扱う。
+
+## `cargo tauri ios init` の実行
+
+`tauri.conf.json` のあるディレクトリ（通常は `src-tauri/`）で実行する:
+
+```bash
+cargo tauri ios init
+```
+
+内部では `cargo-mobile2` が動き、Xcode プロジェクトを scaffolding する。初回は依存のコンパイル、CocoaPods の配線、Xcode プロジェクト生成で数分かかる。
+
+## 生成されるもの
+
+`ios init` 後、プロジェクトに `gen/` ディレクトリが追加される:
+
+```
+src-tauri/
+  Cargo.toml
+  tauri.conf.json
+  Info.ios.plist           # (必要なときに自分で作る)
+  src/
+    lib.rs                 # モバイル用エントリポイントとして `run` をエクスポート
+  gen/
+    apple/                 # iOS 固有の出力
+      Podfile
+      project.yml          # XcodeGen プロジェクト定義
+      <AppName>.xcodeproj/ # 生成された Xcode プロジェクト
+      <AppName>_iOS/
+        <AppName>_iOS.entitlements  # capability entitlements
+      Assets.xcassets/
+      LaunchScreen.storyboard
+      Sources/
+        main.mm            # Rust への橋渡しをする Objective-C++ エントリポイント
+```
+
+`gen/apple/` ディレクトリは **`project.yml` から生成される**。`cargo tauri ios init` や `cargo tauri ios dev/build` を実行するたびに XcodeGen が `project.yml` を読み直し `.xcodeproj` を生成する。`.xcodeproj` を直接編集した内容は上書きされるリスクがある。
+
+<Tip>
+
+`gen/apple/` を git に入れるのは、CI で `ios init` を再実行せずにビルドを再現したい場合などに限定するのが良い。通常の開発では `gen/` を gitignore し、CLI に再生成させる。下に `.gitignore` の例を載せる。
+
+</Tip>
+
+## `lib.rs` は `run` をエクスポートする必要がある
+
+モバイル用エントリポイントは `tauri_lib::run()` を呼ぶ。`src/lib.rs` はおおよそ次のようになる:
+
+```rust
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|_app| Ok(()))
+        .invoke_handler(tauri::generate_handler![])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+`main.rs` はライブラリを呼ぶだけでよい:
+
+```rust
+fn main() {
+    app_lib::run()
+}
+```
+
+`app_lib` は実際のクレートの lib 名に置き換える（`Cargo.toml` の `[lib]` で設定する）。`lib.rs` がまだない場合は追加し、`Cargo.toml` を更新する:
+
+```toml
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+```
+
+`staticlib` が iOS ビルド時に実際にリンクされるクレートタイプである。これがないと `cargo tauri ios build` は失敗する。
+
+## `tauri.conf.json > bundle.iOS`
+
+iOS 固有のバンドル設定は `bundle.iOS` の下に書く:
+
+```json
+{
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "iOS": {
+      "developmentTeam": "ABCD123456",
+      "minimumSystemVersion": "14.0",
+      "frameworks": ["CoreHaptics", "WebKit"],
+      "bundleVersion": "1"
+    }
+  }
+}
+```
+
+| フィールド              | 役割                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| `developmentTeam`       | 10 文字の Apple Team ID。Xcode > Settings > Accounts > 対象チームの "Team ID" で確認             |
+| `minimumSystemVersion`  | `IPHONEOS_DEPLOYMENT_TARGET` にマップ。デフォルト `13.0`。モダンな Web API が必要なら `14.0`+ へ |
+| `frameworks`            | 追加でリンクする Apple フレームワーク。変更したら `cargo tauri ios init` の再実行が必要          |
+| `bundleVersion`         | `CFBundleVersion` にマップ。デフォルトはトップレベルの `version`。ビルド番号を別管理するとき上書き |
+
+<Note>
+
+`developmentTeam` は環境変数 `APPLE_DEVELOPMENT_TEAM` でも設定できる。Team ID をコミットしたくない CI で便利。env var が設定フィールドより優先される。
+
+</Note>
+
+## `identifier` のルール
+
+`tauri.conf.json` のトップレベルの `identifier` が iOS のバンドル ID になる:
+
+```json
+{
+  "identifier": "com.takazudo.myapp"
+}
+```
+
+Apple Developer ポータルで登録した App ID（または Personal Team 用に Xcode が自動生成したもの）と**一致している必要がある**。慣習として逆 DNS 形式（`com.<org>.<app>`）を使う。
+
+<Warning>
+
+英数字とドットだけにしておく。古い Tauri バージョンでは `-` や `_` を含むバンドル ID にバグがあった。`com.takazudo.my-app` で壊れた実例があり、`com.takazudo.myapp` の方が安全である。
+
+</Warning>
+
+## `Info.ios.plist`: 追加キーのマージ
+
+Tauri は `CFBundleShortVersionString`、`CFBundleVersion` など基本キーを含んだ `Info.plist` を自前で生成する。カメラ使用許可、ATS 例外、URL スキームハンドラなど追加のキーが必要なら、`tauri.conf.json` の隣に `Info.ios.plist` を作る:
+
+```xml title="src-tauri/Info.ios.plist"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSCameraUsageDescription</key>
+    <string>This app uses the camera to scan QR codes.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>This app needs access to your photos to attach images.</string>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+</dict>
+</plist>
+```
+
+ここで定義したキーは生成済みの `Info.plist` にマージされる。デスクトップと iOS 共通のキーは通常の `Info.plist` に置いても良い -- Tauri は両方を読む。
+
+## Entitlements ファイル
+
+Push 通知、App Groups、Associated Domains など entitlement が必要な capability は `gen/apple/<AppName>_iOS/<AppName>_iOS.entitlements` で管理される。このファイルは**再生成される**ため、編集は注意:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>aps-environment</key>
+    <string>development</string>
+</dict>
+</plist>
+```
+
+実際には、無料の Personal Team ではこれらの capability を付与できないので、有料 Apple Developer Program に加入するまでこのファイルを触る機会はほぼない。
+
+## `.gitignore` の追加
+
+iOS を有効にした Tauri プロジェクトでは既存の `.gitignore` を拡張する:
+
+```
+/target/
+/gen/apple/Pods/
+/gen/apple/Externals/
+/gen/apple/build/
+```
+
+`gen/apple/` の残りを無視するかどうかは判断が分かれる。Xcode プロジェクトをコミットしておけば GUI でビルド設定を調整しやすくなるが、その代わり "`project.yml` を編集 > 再 init" のワークフローを捨てることになる。安全なデフォルトは `gen/` ごと無視して CI で再生成することである。
+
+## iOS バージョンマトリクス
+
+| `minimumSystemVersion` | 対応デバイス                   | メモ                                                        |
+| ---------------------- | ------------------------------ | ----------------------------------------------------------- |
+| `13.0`（Tauri デフォルト） | iPhone 6s 以降                | 最小ライン。一部のモダン Web API が欠ける可能性あり         |
+| `14.0`                 | iPhone 6s 以降                 | WKWebView 機能が改善、`container` クエリが使える           |
+| `15.0`                 | iPhone 6s 以降                 | 2025 年以降のモダン Web アプリには無難な選択                |
+| `16.0`                 | iPhone 8 以降                  | 古い機種を切る代わりに Developer Mode の統一フローが手に入る |
+
+フロントエンドが実際に使う Web API をサポートする最低バージョンを選ぶ。詳細は [caniuse.com](https://caniuse.com) を Safari-iOS でフィルタして確認すると良い。
+
+## 公式ドキュメント
+
+- [Tauri Project Structure](https://v2.tauri.app/start/project-structure/)
+- [Tauri Configuration Reference](https://v2.tauri.app/reference/config/)
+- [App Store Submission](https://v2.tauri.app/distribute/app-store/)

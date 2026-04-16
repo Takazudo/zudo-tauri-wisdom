@@ -1,0 +1,163 @@
+---
+title: App Store Review Guideline 4.2
+description: WebView ラッパーアプリがリジェクトされる理由と、審査を通すために必要なネイティブ機能
+sidebar_position: 7
+---
+
+このページは概念的なガイダンスであり、承認を保証するチェックリストではない。App Store 審査は本質的に主観的な面が残る。とはいえ、通るものと通らないものには明確な傾向があり、Tauri でラップした Vite + React アプリを出す前にこれを知っておけば、初回リジェクトの痛みを減らせる。
+
+## Guideline 4.2 の内容
+
+Apple 公式の [App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/) より:
+
+> **4.2 Minimum Functionality**
+>
+> Your app should include features, content, and UI that elevate it beyond a repackaged website. If your app is not particularly useful, unique, or 'app-like,' it doesn't belong on the App Store.
+
+（意訳: 単に Web サイトを再パッケージしたものを超える機能・コンテンツ・UI がアプリに含まれていること。「特に便利・ユニーク・アプリらしい」と言えないアプリは App Store にふさわしくない）
+
+キーは "repackaged website" というフレーズである。モバイル Web サイトを WebView で表示するだけが目的のアプリは Apple にリジェクトされる。`https://myproduct.com` を読むだけの Tauri アプリはほぼ毎回リジェクトされる。
+
+WebView ラッパーアプリでよく引っかかるサブガイドライン:
+
+- **4.2.1 / 4.2.2** -- "モバイル Web サイトとほとんど変わらない" アプリ
+- **4.2.3** -- 主に Web ポータルや検索エンジンとして機能するアプリ
+- **4.3** -- スパム / 既存アプリの重複
+
+## なぜ Tauri アプリが "repackaged website" に見えるのか
+
+レビュアー視点で以下は赤信号になる:
+
+- ネイティブナビゲーションがない（タブバーなし、システムの戻るジェスチャーフィードバックなし）
+- "共有" タップ時にネイティブ共有シートが出ない
+- Safari で開きそうに見える `<a href>` リンク
+- ブラウザ風のプログレスバー
+- オフライン時に Web のエラーページが出る（"No internet connection -- check your network"）
+- バンドル ID は別でも Web サイトに対する明らかな機能的優位がない
+- Push 通知がない
+- プラットフォーム統合がない（写真、連絡先、カレンダーなど）
+
+Tauri はこれらを自動で解決しない。ネイティブ面はフロントエンドで追加する必要がある。
+
+## "ネイティブらしさ" を足すレバー
+
+典型的な手段をいくつか挙げる。全部やる必要はないが、おそらく複数は必要になる。
+
+### Push 通知
+
+APNs Push は「これは本当にアプリだ」とレビュアーに感じさせる最強のシグナルのひとつ。
+
+- 有料 Apple Developer Program が必要（無料チームでは使えない）
+- Tauri の通知プラグインまたは `tauri-plugin-notification` を使って APNs トークンを要求・処理する
+- `aps-environment` entitlement を登録し、`Info.ios.plist` の `UIBackgroundModes` に `remote-notification` を入れる
+
+サーバ push なしのローカル通知でも効果はある -- Web サイトにはできない何かをやっている証拠になる。
+
+### ネイティブ共有シート
+
+コンテンツを共有するときは `navigator.share()` を呼ぶか、iOS の `UIActivityViewController` を表に出す Tauri コマンドを呼ぶ。どちらの場合でも結果は iOS システムの共有シートになり、ページ内に並べたソーシャルリンクではない。
+
+```ts
+if (navigator.share) {
+  await navigator.share({
+    title: "Check this out",
+    url: "https://example.com/content/123",
+  });
+}
+```
+
+`navigator.share` は iOS 12.2+ の WKWebView で Share 権限が許可されていれば動く。
+
+### 写真ライブラリ / カメラ
+
+ファイル input（`<input type="file" accept="image/*">`）は iOS の写真ピッカーを呼ぶ。次のキーが必要:
+
+```xml title="Info.ios.plist (抜粋)"
+<key>NSPhotoLibraryUsageDescription</key>
+<string>This app attaches photos to your posts.</string>
+<key>NSCameraUsageDescription</key>
+<string>This app lets you take photos to attach to posts.</string>
+```
+
+ユーザーはネイティブの写真 / カメラ UI を見ることになる。Web サイトでは出せないものである。
+
+### Haptics
+
+WKWebView は `navigator.vibrate` を介した限定的な haptics を出せるが、本物の iPhone haptics（selection / impact / notification）がほしいなら `UIImpactFeedbackGenerator` を呼ぶ Tauri プラグインを使う。
+
+### ネイティブっぽい戻る / タブバー
+
+複数セクションのアプリでは、CSS で組まれたネイティブ風のタブバーで十分通る -- 実装が本物の `UITabBar` である必要はない。重要なのは、ナビゲーションがアプリらしく見え、感じられること。下部固定、親指で届く位置、明確なアイコンとラベル、といった要素である。
+
+良いヒューリスティクス: WKWebView を Safari に置き換えたとき、レイアウトが「アプリ内用に作られた」ものに見えて明らかに崩れるか。崩れるなら方向は合っている。
+
+### オフライン処理
+
+ブラウザと同じ "No Internet Connection" を出すだけだとリジェクトリスクになる。用意すべきは:
+
+- カスタムオフライン画面とリトライボタン
+- オフラインでも読める、IndexedDB にキャッシュされたコンテンツ
+- ブラウザのエラーページに見えないメッセージ
+
+### ウィジェット（iOS 14+）
+
+ウィジェットは強力なネイティブ機能だが、必要なものが多い:
+
+- 有料 Apple Developer Program
+- Xcode のウィジェット拡張ターゲット -- Tauri が自動生成するものではない
+- ウィジェットの SwiftUI コードを書く
+
+作業量が多い。初回提出ではオーバーキルだろう。ただし手があるなら 4.2 への強い答えになる。
+
+## 期待するほど効かないもの
+
+- **"モバイルでは呼び方を変えている"** -- 表面的な差は 4.2 を通さない
+- **スプラッシュ画面** -- 標準の iOS 作法であり、差別化要素ではない
+- **"ダークモード対応"** -- 当然のベースライン。機能ではない
+- **カスタムエラーページ** -- 役に立つが単体では不十分
+- **"Web サイトはモバイルブラウザ必須"** -- 4.2 への答えにはならない
+
+## "業務ツールのラッパー" の実用最低ライン
+
+ダッシュボード / メモ / タスクトラッカーの Web アプリを Tauri iOS として出すなら、妥当な最低ラインはこのあたり:
+
+- [ ] iOS 向けに設計されたアプリアイコン（Web の favicon ではない）
+- [ ] `LaunchScreen.storyboard` のローンチ画面
+- [ ] safe-area インセットを尊重したレスポンシブレイアウト
+- [ ] アプリらしい下部ナビゲーション（タブバーやドック）
+- [ ] 意味のある 1 つ以上のイベントでローカル通知
+- [ ] 少なくとも 1 画面で `navigator.share` による共有シート
+- [ ] 画像添付用のファイルピッカー（usage-description の plist キー付き）
+- [ ] ブラウザのエラーページではない、リトライ付きオフライン画面
+- [ ] URL バー、プログレスバーなどブラウザ chrome が見えていない
+
+コンシューマ向けのソーシャルやコマースなら、さらに push 通知と、コアフローで実際に使うプラットフォーム統合（カメラ、連絡先、写真のいずれか）を足す。
+
+## スクリーンショットとメタデータ
+
+技術的にはネイティブでも、App Store Connect メタデータが「Web サイトそのものです」と叫んでいると 4.2 で落ちる:
+
+- デスクトップ Web のスクリーンショットを流用しない。iOS 専用のスクリーンショットを撮る
+- マーケティング文言に製品名を使う。「Web サイトをそのままアプリに」ではない
+- iOS 上でユニークに動く機能を紹介する
+
+## 異議申し立てプロセス
+
+もし 4.2 でリジェクトされたら、App Review Board への appeal が可能:
+
+1. App Store Connect の Resolution Center で、レビュアーが見落としたネイティブ機能を具体的に列挙して返信
+2. App Review との電話を依頼
+3. Review Board に正式な appeal を提出
+
+実際には、ネイティブ機能を具体的に指摘した返信（スクリーンショット付きが理想）で決定が覆るケースはそれなりに多い。それでもダメなら、追加のネイティブ機能を入れて再提出するのが定番である。
+
+## 関連ページ
+
+- 上記のネイティブ機能の多くは有料プログラムを必要とする -- [無料 Personal Team での署名](./ios-signing-free-team.mdx)
+- WebView がアプリらしく感じられるようにするには、まず Web ページに見えないようにする -- [iOS の WKWebView ハマりどころ](./wkwebview-gotchas.mdx)
+
+## 外部リファレンス
+
+- [Apple: App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
+- [Apple: 4.2 Minimum Functionality forum thread](https://developer.apple.com/forums/thread/806726)
+- [Tauri: App Store Distribution](https://v2.tauri.app/distribute/app-store/)

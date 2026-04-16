@@ -1,0 +1,177 @@
+---
+title: 無料 Personal Team での署名
+description: 7 日プロビジョニングプロファイル、使えない capabilities、有料 Apple Developer Program へのアップグレードパス
+sidebar_position: 5
+---
+
+Apple は無料の Apple ID を持つ人なら誰でも、自分の実機にアプリをビルド・インストールすることを許可している。このページでは、その無料経路の制約と、有料の Apple Developer Program（年 99 USD）にアップグレードすべきタイミングを扱う。
+
+## 無料の Personal Team
+
+Xcode に通常の Apple ID（有料 Apple Developer Program アカウントではない）でサインインすると、Xcode は無料の "Personal Team" を割り当てる。`Xcode > Settings > Accounts` で `Your Name (Personal Team)` として表示される。
+
+Personal Team でできること:
+
+- iOS シミュレーターでアプリを何度でも実行
+- 自分の iPhone / iPad にインストール
+- entitlement を必要としない一般的な Tauri プラグインやシステム API を使う
+
+明示的にできないこと:
+
+- App Store や TestFlight への提出
+- entitlement が必要な capability（Push 通知、iCloud、App Groups、Sign in with Apple、Associated Domains、Apple Pay、Background Modes の一部）
+- 自分の Apple ID でない人へのビルド配布
+
+## 7 日プロビジョニングプロファイル
+
+ここが目玉の制限である。Personal Team のプロビジョニングプロファイルは作成後 **7 日** で期限切れになる。期限切れ後はデバイス上のアプリが起動しなくなる -- アイコンをタップしても何も起こらないか、曖昧なエラーが出るだけである。
+
+アプリを動かし続けたければ、Xcode（または `cargo tauri ios dev`）から再ビルド・再デプロイし、プロファイルを更新する必要がある。次の 7 日が始まる。
+
+<Warning>
+
+これはソフトな警告ではない -- 7 日経つとアプリはただ動かなくなる。知人に dev ビルドを渡してテストしてもらうなら、この制約を計画に織り込むこと。
+
+</Warning>
+
+### その他のクォータ制限
+
+| 制限                                                | 値                     |
+| --------------------------------------------------- | ---------------------- |
+| プロビジョニングプロファイルの有効期間              | 7 日                   |
+| Personal Team で同時登録できる App ID 数            | 10                     |
+| Apple ID あたりの同時デバイス数                     | ~3（緩めに運用される） |
+| TestFlight の利用可否                               | 不可                   |
+| App Store の利用可否                                | 不可                   |
+
+これらのどれかに当たったら、Apple Developer ポータルから古い App ID を削除するか、有料プログラムにアップグレードする。
+
+## Personal Team 用の Tauri 設定
+
+Xcode で Team ID を確認する:
+
+1. `Xcode` > `Settings` > `Accounts`
+2. 自分の Apple ID を選択
+3. `Manage Certificates` またはチーム行をクリックすると、10 文字の `Team ID` がチーム名の近くに表示される
+
+`tauri.conf.json` に設定する:
+
+```json
+{
+  "bundle": {
+    "iOS": {
+      "developmentTeam": "ABCD123456"
+    }
+  }
+}
+```
+
+コミットしたくない場合は環境変数でも可:
+
+```bash
+export APPLE_DEVELOPMENT_TEAM=ABCD123456
+cargo tauri ios dev --host
+```
+
+Xcode は初回ビルド時にプロビジョニングプロファイルを自動生成・更新する。
+
+## バンドル ID のクセ
+
+無料 Personal Team では、バンドル ID（`tauri.conf.json > identifier`）は自分の Apple ID 内で一意である必要がある。注意点が 2 つ:
+
+### 自分自身との衝突
+
+`com.takazudo.myapp` を dev ビルド 1 としてインストールし、コードを変えて dev ビルド 2 として再インストールする場合、iOS は通常うまく扱える。ただし、同じ Apple ID にサインインした複数マシンで同じ識別子を使うと、デバイスがどのプロビジョニングプロファイルを信頼すべきか混乱することがある。
+
+対策: 試行錯誤中はマシン固有の prefix/suffix を付ける。例えば `com.takazudo.myapp.dev` のように。
+
+### ハイフンとアンダースコア
+
+[プロジェクト構成ページ](./ios-project-structure.mdx#identifier-%E3%81%AE%E3%83%AB%E3%83%BC%E3%83%AB)にも書いた通り、古い Tauri では識別子の `-` や `_` にバグがあった。問題が確認できるまでは英数字 + ドットにとどめるのが無難。`com.takazudo.myappdev` のほうが `com.takazudo.my-app-dev` より安全である。
+
+## デバイスで開発者を信頼する
+
+初めて無料チーム署名のビルドを実機に入れたとき:
+
+1. インストールされたアプリをタップ -- iOS は起動を拒否し "Untrusted Developer" を表示する
+2. iPhone 側で: `設定` > `一般` > `VPN とデバイス管理`
+3. 自分の開発者エントリ（Apple ID メール）を探す
+4. `Trust "Apple Development: your@email.com"` > `Trust` をタップ
+5. アプリを再起動
+
+この信頼はデバイス × 開発者の単位で保持されるため、1 つの iPhone × Apple ID の組では一度だけで良い。ただしデバイスを初期化したり iCloud を別アカウントに切り替えると再度やり直しになる。
+
+## 使えないものとその回避策
+
+| Capability                   | 無料 Team | 有料プログラム | 回避策                                                                              |
+| ---------------------------- | --------- | -------------- | ----------------------------------------------------------------------------------- |
+| Push 通知 (APNs)             | 不可      | 可             | フロントでポーリング、ローカル通知（entitlement 不要）を使う、またはアップグレード  |
+| iCloud / CloudKit            | 不可      | 可             | 自前バックエンドやサードパーティの同期レイヤーを使う                                 |
+| App Groups                   | 不可      | 可             | 拡張機能との間でデータを共有するなら有料プログラム必須。拡張機能は諦める             |
+| Associated Domains           | 不可      | 可             | Universal Links は使えない。カスタム URL スキームにフォールバック                    |
+| Sign in with Apple           | 不可      | 可             | アップグレードまで Google / GitHub OAuth などを使う                                  |
+| In-App Purchase              | 不可      | 可             | 有料プログラムなしでは IAP のテスト自体ができない                                   |
+| ローカル通知                 | 可        | 可             | 権限プロンプトだけで動く                                                             |
+| カメラ / マイク / 写真       | 可        | 可             | 動く。`Info.ios.plist` に使用目的の記述キーが必要                                   |
+
+不可の capability を entitlements ファイルに入れると、署名段階で `Provisioning profile "..." doesn't include the <Capability> entitlement` エラーでビルドが失敗する。
+
+## 有料プログラムへのアップグレードパス
+
+自分のデバイス以外にも配布したくなったら:
+
+1. [developer.apple.com/programs](https://developer.apple.com/programs/) で登録 -- 年 99 USD。Apple が本人確認を行う（個人でも数日、組織の場合は D-U-N-S 番号の取得で数週間かかることもある）
+2. 承認されると、"Personal Team" ではない実チームに属するようになる
+3. `tauri.conf.json > bundle > iOS > developmentTeam` を新しい Team ID に更新
+4. Apple Developer ポータルでバンドル識別子を App ID として登録
+5. App Store 提出は [Tauri の App Store ガイド](https://v2.tauri.app/distribute/app-store/) に従う
+6. プロビジョニングプロファイルが 1 年有効になる（7 日ではなく）
+7. TestFlight で外部ベータテスターに配布可能になる
+
+アップグレードで Tauri 側のコードは変わらない。変わるのは設定と Xcode でのチーム選択だけである。
+
+## CI での署名（有料プログラム限定）
+
+有料チームを手に入れたら、CI での署名は App Store Connect API キーと環境変数で行う:
+
+| 環境変数              | 目的                                              |
+| --------------------- | ------------------------------------------------- |
+| `APPLE_API_ISSUER`    | App Store Connect API Issuer ID                   |
+| `APPLE_API_KEY`       | App Store Connect API Key ID                      |
+| `APPLE_API_KEY_PATH`  | `.p8` 秘密鍵ファイルへのパス                      |
+
+手動署名（Tauri では Xcode 自動署名で事足りるので頻度は低い）の場合、証明書・プロビジョニングプロファイルを base64 で渡す環境変数を追加で使う:
+
+- `IOS_CERTIFICATE`
+- `IOS_CERTIFICATE_PASSWORD`
+- `IOS_MOBILE_PROVISION`
+
+手順の全体像は Tauri の [iOS Code Signing ドキュメント](https://v2.tauri.app/distribute/sign/ios/) を参照。
+
+## よくあるハマりどころ
+
+### 一度起動したアプリがその後起動しない
+
+プロビジョニングプロファイルの期限切れ。`cargo tauri ios dev` か Xcode から再デプロイして 7 日延長する。
+
+### `No profiles for 'com.takazudo.myapp' were found`
+
+Xcode が無料チーム用のプロファイルを生成できなかった。典型的な原因:
+
+- Xcode にサインインしていない（`Xcode > Settings > Accounts`）
+- 10 App ID 制限に到達（[developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers/list) から古いものを削除）
+- 無料チームで許可されない capability を使おうとした -- entitlements ファイルから削除する
+
+### "Provisioning profile doesn't include the Push Notifications capability"
+
+entitlements ファイルに push の entitlement が残っているが、無料チームでは push 用に署名できない。`gen/apple/<AppName>_iOS/<AppName>_iOS.entitlements` から `aps-environment` を削除する。
+
+### シミュレーターでは動くのに実機で失敗
+
+シミュレーターは署名を強制しない。ほぼ何でも動く。実機は署名を強制するので、capability の欠落、期限切れプロファイル、チームの食い違いがここで顔を出す。
+
+## 公式ドキュメント
+
+- [Tauri iOS Code Signing](https://v2.tauri.app/distribute/sign/ios/)
+- [Apple: Compare Memberships](https://developer.apple.com/support/compare-memberships/)
+- [Apple: Provisioning Profile Updates](https://developer.apple.com/help/account/provisioning-profiles/provisioning-profile-updates/)

@@ -1,0 +1,193 @@
+---
+title: iOS 開発ループ（シミュレーターと実機）
+description: シミュレーターと実機で cargo tauri ios dev を実行、TAURI_DEV_HOST、Vite 設定、ATS、Safari Web Inspector
+sidebar_position: 4
+---
+
+[前提条件](./ios-prerequisites.mdx)が整い、`cargo tauri ios init` が完了した後の日々のループについて。
+
+## シミュレーターで実行
+
+```bash
+cargo tauri ios dev
+```
+
+デフォルトでは CLI はまず接続済みの実機を探し、なければシミュレーターにフォールバックする。特定のシミュレーターを直接指定するには:
+
+```bash
+cargo tauri ios dev 'iPhone 15'
+```
+
+初回は遅い。Rust が 3 ターゲット分の静的ライブラリをコンパイルし、CocoaPods が配線を行う。以降の差分ビルドは数秒で済む。
+
+自動起動せず Xcode にプロジェクトを開くだけにしたい場合:
+
+```bash
+cargo tauri ios dev --open
+```
+
+Xcode にプロジェクトを開いている間も、CLI プロセスはフロントエンドのソース変更を監視するので動かし続けること。
+
+## 実機で実行
+
+iPhone を接続し、[Developer Mode が有効](./ios-prerequisites.mdx#iphone-%E3%81%A7-developer-mode-%E3%82%92%E6%9C%89%E5%8A%B9%E5%8C%96)であることを確認してから:
+
+```bash
+cargo tauri ios dev --host
+```
+
+`--host` が重要なフラグ。Tauri に対して「dev サーバは `localhost` だけでなく LAN から到達可能にせよ」と伝える。これがないと、実機内の WebView は Mac 上の Vite サーバに到達できない。
+
+## `TAURI_DEV_HOST` 環境変数
+
+`--host` 付き（または実機がターゲット）で実行すると、Tauri は `TAURI_DEV_HOST` にマシンの LAN IP を設定する。Vite 設定がこれを尊重する必要がある。そうでなければ Vite は `localhost` だけにバインドし、実機から接続できない。
+
+```ts title="vite.config.ts"
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+const host = process.env.TAURI_DEV_HOST;
+
+export default defineConfig({
+  plugins: [react()],
+  clearScreen: false,
+  server: {
+    host: host || false,
+    port: 1420,
+    strictPort: true,
+    hmr: host
+      ? {
+          protocol: "ws",
+          host,
+          port: 1421,
+        }
+      : undefined,
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
+  },
+});
+```
+
+ポイント:
+
+- `server.host` は `TAURI_DEV_HOST` がセットされているときだけ LAN IP になる。シミュレーターでは `localhost` のまま
+- `hmr.host` は `server.host` と一致させる必要がある。ズレていると HMR の WebSocket 接続が静かに失敗する
+- `hmr.port` は dev サーバ本体とは別ポート
+- `strictPort: true` にしておくと、ポートが既に使われているとき Vite が別ポートにずれて Tauri と食い違うことを防げる
+
+## IPv6 / トンネル IP (`--force-ip-prompt`)
+
+Tauri は LAN IP の代わりに iOS デバイスの TUN インターフェース（`::2` で終わる IPv6 アドレス）を使うこともできる。dev サーバをネットワーク全体に晒さずに済むため、セキュリティ的にはこちらのほうが安全である。
+
+```bash
+cargo tauri ios dev --force-ip-prompt
+```
+
+条件: Xcode を起動し、`Window` > `Devices and Simulators` でデバイスを接続していること。トンネルを確立するのは Xcode 側である。CLI が `::2` アドレスを選ぶプロンプトを出す。
+
+## App Transport Security (ATS)
+
+iOS はデフォルトで `http://` 通信をブロックする。`http://192.168.x.x:1420` を読む Tauri アプリは通常ならブロックされる。Tauri はこれをビルド時に面倒見てくれる -- ローカルネットワークアドレス向けの ATS 例外を生成された Info.plist に注入する。
+
+実際に効いている ATS 規則:
+
+- `127.0.0.1`, `localhost` -- もともと ATS の対象外
+- ローカルネットワーク IPv4 レンジ（`10/8`, `172.16/12`, `192.168/16`） -- 生成 Info.plist の `NSAllowsLocalNetworking` が `true` になっているため許可される
+- 公開ネットワークのホスト名 -- HTTPS が必要か、または明示的な `NSExceptionDomains` エントリが必要
+
+本番では frontend はアプリ内にバンドル済み（`frontendDist`）なので、実行時に ATS が問題になることはない。ATS が噛み付くのは開発時だけである。
+
+<Warning>
+
+本番で独自のバックエンド URL（例: HTTP で配信される REST API）にアクセスする場合は、[`Info.ios.plist`](./ios-project-structure.mdx#infoiosplist-%E8%BF%BD%E5%8A%A0%E3%82%AD%E3%83%BC%E3%81%AE%E3%83%9E%E3%83%BC%E3%82%B8) に `NSExceptionDomains` エントリを追加すること。広範な `NSAllowsArbitraryLoads` は有効にしないこと -- App Store 審査の Guideline 4.2 で問題になる。
+
+</Warning>
+
+## Safari Web Inspector
+
+WebView のデバッグには Safari の Web Inspector を使う。
+
+### Mac 側
+
+1. Safari > 設定 > 詳細
+2. `Web 開発者向けの機能を表示` をチェック
+3. メニューバーに `開発` メニューが現れる
+
+### iPhone 側（実機のみ）
+
+1. 設定 > Safari > 詳細
+2. `Web Inspector` をオン
+
+### 接続
+
+- Tauri アプリをシミュレーターまたは実機で起動
+- Safari で `開発` > `<シミュレーター名>` または `<iPhone 名>` > アプリの WebView エントリを選択
+- 通常の Safari devtools が開き、その WKWebView に接続される
+
+<Tip>
+
+Inspector のエントリはアプリが前面にあるときだけ表示される。見えない場合は、シミュレーター/デバイスのアプリを前面にして、Safari の `開発` メニューを開き直す。
+
+</Tip>
+
+## フロントエンドの Hot Reload
+
+Tauri CLI が dev モードで動いていて、Vite 設定が `TAURI_DEV_HOST` を尊重していれば、React コンポーネントの保存でブラウザと同じように HMR が効く。Rust 側の再ビルドも、デバイスへの再デプロイも不要である。
+
+Rust 側の変更は別物で、`src-tauri/` の `.rs` ファイルを編集すると、ネイティブライブラリのフルビルドとシミュレーター/デバイスへの再デプロイが走る。秒ではなく分の単位になる。
+
+## CLI チートシート
+
+| コマンド                                           | 効果                                                                       |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| `cargo tauri ios dev`                              | デフォルトターゲットで実行（実機があれば実機、なければシミュレーター）      |
+| `cargo tauri ios dev 'iPhone 15'`                  | 名前指定のシミュレーターで実行                                              |
+| `cargo tauri ios dev --host`                       | `TAURI_DEV_HOST` 経由で dev サーバを LAN IP にバインド                      |
+| `cargo tauri ios dev --host --force-ip-prompt`     | デバイスの `::2` IPv6 トンネルアドレスを使う（Xcode を開いておく必要あり）  |
+| `cargo tauri ios dev --open`                       | 自動起動せず Xcode にプロジェクトを開く                                     |
+| `cargo tauri ios build`                            | リリースビルド。IPA は `src-tauri/gen/apple/build/arm64/<App>.ipa` に出力  |
+| `cargo tauri ios build --export-method debugging`  | 開発用プロビジョニングプロファイルで TestFlight 的な side-load 用ビルド     |
+
+## よくあるハマりどころ
+
+### 実機で WebView がネットワークエラーになる
+
+ほぼ確実に `--host` 忘れか、Vite 設定が `TAURI_DEV_HOST` を尊重していない。`process.env.TAURI_DEV_HOST` が実際に読まれているか、`server.host` がそれを拾っているかを確認する。
+
+### ページは読めるが実機だけ HMR が効かない
+
+HMR WebSocket は別ポート（デフォルト 1421）。Vite 設定が `server.host` は設定しているのに `hmr.host` / `hmr.port` を忘れているパターン。両方とも LAN IP に合わせる必要がある。
+
+### デバイスが Mac にまったく届かない
+
+両者が同じ Wi-Fi ネットワークにいる必要がある。ゲストネットワーク、クライアント分離、ピアツーピア通信を遮断する企業 Wi-Fi などでは壊れる。同ネットワークの別端末から Mac の LAN IP に ping が通るかでテストできる。
+
+### アプリは読めるが Tauri コマンドが失敗する
+
+`capabilities/default.json` の `remote.urls` に LAN IP が含まれていない可能性が高い。ワイルドカードで許可するか、URL を動的に生成する。開発だけに限るならこんな形:
+
+```json
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*", "http://192.168.*:*", "http://10.*:*"]
+  },
+  "permissions": ["core:default"]
+}
+```
+
+### デバイスに "Untrusted Developer" のアラート
+
+開発署名のビルドを初めて入れるときに出る。設定 > 一般 > VPN とデバイス管理 > 対象の開発者エントリ > `信頼`。
+
+### シミュレーター起動が遅い
+
+新しいシミュレーターランタイムの初回コールドブートは明らかに遅い。起動したまま残しておくのが良い。
+
+## 公式ドキュメント
+
+- [Tauri Develop](https://v2.tauri.app/develop/)
+- [Tauri Vite Integration](https://v2.tauri.app/start/frontend/vite/)
+- [Apple: Configuring App Transport Security](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity)
