@@ -1,0 +1,94 @@
+---
+title: iOS での input フォーカス時のオートズーム
+description: WKWebView が 16px 未満の input にフォーカス時ズームする理由と、ピンチズームを潰さずに防ぐ方法
+sidebar_position: 8
+---
+
+## 問題
+
+iOS Safari と `WKWebView` では、input 系要素にフォーカスすると、その要素のレンダリングされたフォントサイズが 16px 未満だった場合に viewport が自動でズームインする。対象はプレーンな `<input>` / `<textarea>` だけでなく、内部で `contenteditable` を使っているエディタ（CodeMirror、ProseMirror、Slate など）も含まれる。タップすると viewport がズームイン、blur してもズームされたまま、ユーザーは切り取られたページを見続けることになり、自分でピンチアウトするまで戻らない。
+
+この問題は実機の Tauri iOS アプリ（中身は `WKWebView`）だけでなく、同じフロントエンドを iPhone で見た Web ビルド全般でも発生する -- Cloudflare Pages のプレビュー URL、Netlify プレビュー、レビュー用に同じ `dist/` を置くあらゆる場所で再現する。
+
+## なぜ 16px なのか
+
+Apple のヒューリスティック: 16px 未満でレンダリングされる input は読めないと見なし、アクセシビリティのために自動ズームする。閾値は CSS で宣言した値ではなく、**すべての transform や scale を適用した後の実レンダリングサイズ**である。`font-size: 16px` の要素を `transform: scale(0.9)` で包むと実質 14.4px になり、しっかりズームが発動する。
+
+この挙動は iOS 限定である。macOS Safari では発動しない。他プラットフォームの WebKit（例: Linux の GTK WebKit）でも発動しない。デスクトップ中心で開発していると最後の最後までバグの存在に気づけない、という性格がある。
+
+## Tauri アプリでの影響
+
+Tauri iOS アプリは `WKWebView` なので、同じ 16px ルールが効く。デスクトップ中心のアプリはエディタフォントを 13-14px あたりに設定していることが多い -- ターミナル出力、CodeMirror、小さなフォーム入力、インラインのリネームフィールドなど。iPad / iPhone ではそのすべてがフォーカス時ズームの対象になる。
+
+同じフロントエンドのバンドルを公開 Web プレビュー（例: `dist/` を Cloudflare Pages のプレビューにデプロイ）で出すと、レビュー担当者が iPhone でリンクを開いたときに同じ問題が起きる。「iPhone でプレビューが壊れている」と報告されるケースは、だいたいこのルールに行き着く。
+
+## 対策オプション
+
+推奨順。
+
+### 案 A: coarse pointer 環境で input / エディタの font-size を 16px 以上に引き上げる
+
+一番クリーンな対処。`@media (pointer: coarse)` クエリで絞れば、デスクトップユーザーは好みの小さいサイズのまま、タッチデバイスだけが 16px ミニマムを受け取る形になる。
+
+```css
+@media (pointer: coarse) {
+  .cm-content,
+  .cm-scroller {
+    font-size: 16px;
+  }
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+```
+
+この方法ならピンチズームを残せるので、アクセシビリティ（WCAG 2.1 1.4.4「テキストのサイズ変更」）適合を崩さない。対象の input だけサイズが変わり、周囲のレイアウトは無傷である。
+
+### 案 B: モバイルではアプリ全体の display scale を上げる
+
+アプリがすでに `--display-scale` の仕組みを持っているなら（[Display Scale System](../recipes/display-scale-system.mdx) を参照）、起動時に一度 coarse pointer を判定し、エディタが 16px を超えるような scale を提案するのも一つの角度である。14px ベースを `--display-scale: 1.25` で描画すると 17.5px になり、閾値を安全に超える。
+
+ユーザー設定を黙って上書きしてはいけない。設定画面に一度だけ通知を出す -- 「タッチデバイスを検出しました。読みやすさのため 125% の display scale にしますか？」程度の文言に「125% にする」ボタンを添え、ユーザーの答えを記憶する -- のが適切である。案 A との多重防御として相性が良い。案 A で漏れた input を案 B が救い、案 B で UI 全体を電話向けのスケールに引き上げる。
+
+### 案 C: CSS `scale()` とネガティブマージン
+
+ピクセル完璧だが脆い。input に `font-size: 16px` を宣言して iOS を黙らせ、`transform: scale(0.875)` で見た目を縮め、周囲のレイアウトが崩れないようネガティブマージンで補正する。
+
+CodeMirror など、未スケールのボックスからセル幅を計測するエディタでは崩壊する。カーソル位置、選択矩形、ガター整列のすべてが scale ファクターぶんズレる。測定依存がないプレーンな単行 input 以外では避けたほうが良い。
+
+### 案 D: viewport meta でピンチズームを無効化
+
+```html
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no"
+/>
+```
+
+そもそもズーム自体を許可しないので、オートズームも起こらない。ただしユーザーがどんな理由であれピンチズームできなくなるため、WCAG 2.1 1.4.4 に違反する。
+
+Tauri iOS アプリのバンドル内部では受け入れられる -- viewport は閉じたアプリ面であり、ユーザーはブラウザジェスチャーを期待しない。ただし公開 Web プレビュー URL では受け入れられない。両方に同じ `index.html` を出荷しているなら、案 D はモバイル Web のユーザー体験を悪化させる設定を漏らしていることになる。
+
+## Tauri 特有の注意
+
+Tauri iOS テンプレートのデフォルトの `index.html` viewport meta には `maximum-scale` は入っていない。もし既存のデスクトップ用 `index.html` に `user-scalable=no` が入っているなら、アプリビルドについては暗黙のうちに案 D に乗っていることになる -- これ自体はアプリなら問題ない -- が、同じ方針をそのまま Web プレビューにも出荷していることになる。
+
+きれいに扱う手は 2 つ。
+
+- Web ビルド向けに別の `index.html`（もしくは別の viewport meta）を用意し、ピンチズームを許可する
+- `user-scalable=no` を完全に外し、オートズーム問題はアプリでも Web でも案 A（input 単位でのフォントサイズ）で対処する
+
+## テスト方法
+
+- **iOS Simulator** ではオートズームが再現する。Mac から検証する最低摩擦の経路はこれ。
+- **macOS の Safari** では再現**しない**。16px ルールは iOS 限定である。
+- **Chrome DevTools の「iPhone」デバイスエミュレーション**でも再現しない。viewport サイズの問題ではなく、WebKit on iOS の実挙動だからである。
+
+一番手軽な目視確認: 実機 iPhone の Safari でページを開き、input をタップして viewport がズームするか見る。ズームして blur 後もズームしたままなら、まだ修正が効いていない。
+
+## 関連ページ
+
+- 入力フォーカスに絡むスクロールジャンプ問題（表面は似ているが原因が違う）は [iOS の WKWebView ハマりどころ](./wkwebview-gotchas.mdx)
+- 案 B で触れたグローバルスケールの仕組みは [Display Scale System](../recipes/display-scale-system.mdx)
