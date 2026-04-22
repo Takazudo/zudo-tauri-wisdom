@@ -338,6 +338,102 @@ sequenceDiagram
   Rust->>Rust: app_handle.exit(0)
 ```
 
+## Detecting Sidecar Death in the Readiness Loop
+
+The naive readiness loop polls `/___ready` and either returns `Ready` or gives up after a timeout. That works when the sidecar is healthy, but it burns the full timeout whenever the sidecar has already died — typically because a dependency like `node_modules/` is missing on a fresh install. The user sees the loading page for the full 120 s and then the app navigates to a dead port anyway.
+
+The fix is to let `wait_for_ready` short-circuit when the child process has exited. Pass the sidecar handle in and call `Child::try_wait()` each poll tick:
+
+```rust
+pub enum ReadyResult {
+    Ready,
+    Timeout,
+    SidecarExited { code: Option<i32> },
+}
+
+pub fn wait_for_ready(
+    sidecar: &Arc<Mutex<Option<Sidecar>>>,
+    timeout: Duration,
+) -> ReadyResult {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        // Scope the lock narrowly — do NOT hold it across the curl call.
+        if let Ok(mut guard) = sidecar.lock() {
+            if let Some(s) = guard.as_mut() {
+                match s.child.try_wait() {
+                    Ok(Some(status)) => {
+                        return ReadyResult::SidecarExited {
+                            code: status.code(),
+                        };
+                    }
+                    Ok(None) => {} // still running
+                    Err(e) => log(&format!("try_wait error: {e}")),
+                }
+            }
+        }
+
+        let code = check_ready();
+        if code != "000" && code != "err" {
+            thread::sleep(Duration::from_secs(1));
+            return ReadyResult::Ready;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    ReadyResult::Timeout
+}
+```
+
+Three details matter:
+
+- **`try_wait()` is cheap.** It is a single `waitpid(WNOHANG)` syscall that returns `Ok(None)` while the child runs and `Ok(Some(status))` once it exits. Safe to call in a 1 Hz poll.
+- **Scope the mutex lock narrowly.** Acquire → `try_wait()` → drop the guard before running `curl`. Holding the guard across the network call would block refresh, exit, and any other path that needs the same mutex.
+- **Both call sites branch on `ReadyResult`.** `setup()`'s initial launch and `do_refresh()` both consume the enum and surface a `launch-error` event instead of navigating to a dead port. See [Loading Screen → Error state and retry](./loading-screen.mdx#error-state-and-retry) for the frontend side.
+
+<Warning>
+
+Do NOT hold the `Mutex<Option<Sidecar>>` guard across the `curl` call. A one-second curl with the lock held is enough to stall any refresh, retry, or window-close event that also needs to touch the sidecar. Scope the guard to just the `try_wait()` read.
+
+</Warning>
+
+### Emitting a launch-error event
+
+When `wait_for_ready` returns `Timeout` or `SidecarExited`, emit a Tauri event instead of navigating to a dead URL. The loading page listens for it and flips into an error state (see loading-screen.mdx).
+
+```rust
+use tauri::{AppHandle, Emitter, Manager};
+
+fn emit_launch_error(app_handle: &AppHandle, reason: &str) {
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.emit(
+            "launch-error",
+            serde_json::json!({
+                "reason": reason,
+                "logPath": sidecar_log_path().to_string_lossy(),
+            }),
+        );
+    }
+}
+
+// In setup() / do_refresh():
+match wait_for_ready(&state.sidecar, Duration::from_secs(120)) {
+    ReadyResult::Ready => {
+        let _ = w.navigate(server_url().parse().unwrap());
+    }
+    ReadyResult::Timeout => emit_launch_error(&handle, "timeout"),
+    ReadyResult::SidecarExited { .. } => {
+        emit_launch_error(&handle, "sidecar_exited");
+    }
+}
+```
+
+<Tip>
+
+`tauri::Emitter` is the v2 trait that adds `.emit()` to `AppHandle` and `WebviewWindow`. Emitting from the window (not the app handle) targets that window's frontend listeners cleanly.
+
+`serde_json` ships transitively via `tauri`, so promoting it from `dev-dependencies` to `dependencies` costs nothing in compile time and lets you build the payload with `serde_json::json!` instead of a custom struct.
+
+</Tip>
+
 ## Logging
 
 Both the app's own lifecycle events and the sidecar's output should be logged to separate files:

@@ -280,3 +280,137 @@ fn do_refresh(app_handle: &AppHandle) {
 ```
 
 This kills the old sidecar, cleans up the port, spawns a new one, waits for it to be ready, and then navigates. The timeout for refresh (15 seconds) is shorter than the initial startup timeout (120 seconds) because the server is expected to start faster on subsequent launches.
+
+## Error State and Retry
+
+The minimal "spinner + text" loading page works for the happy path, but it lies to the user when the sidecar has already died or the build has stalled. The user sees the same spinner whether the sidecar is building normally or has crashed and will never come back.
+
+The next-level pattern is a loading page that doubles as an error panel. The spinner is the happy path; a hidden error panel listens for a backend-emitted `launch-error` event and flips into an actionable state with a Retry button.
+
+### The backend contract
+
+The Rust side emits a `launch-error` event instead of navigating when [readiness polling detects sidecar death or a timeout](./process-lifecycle.mdx#detecting-sidecar-death-in-the-readiness-loop):
+
+```rust
+// Shape of the event payload
+// { reason: "timeout" | "sidecar_exited", logPath: "/path/to/sidecar.log" }
+```
+
+A matching `retry_launch` command triggers the restart so the frontend can offer a Retry button:
+
+```rust
+#[tauri::command]
+fn retry_launch(app_handle: AppHandle) {
+    // Spawn on a background thread — never block the IPC thread.
+    // do_refresh() re-emits launch-error on failure, so a retry
+    // that fails again naturally flips the UI back to the error state.
+    thread::spawn(move || {
+        do_refresh(&app_handle);
+    });
+}
+```
+
+<Warning>
+
+Never run a long restart inline on the IPC thread. Tauri's IPC runtime dispatches commands on a small thread pool; a `retry_launch` that spawns a sidecar, waits 15 s for readiness, and then returns will block other commands for that entire window. Spawn the work on a background `std::thread` and return immediately.
+
+</Warning>
+
+### The frontend panel
+
+The loading HTML grows a hidden error panel. Inline CSS and JS only — the page is bundled and has no bundler, so imports are not an option:
+
+```html
+<!-- frontend/index.html (abbreviated) -->
+<body>
+  <div id="spinner" class="spinner"></div>
+  <div id="long-hint" class="sub" hidden>Taking longer than usual…</div>
+
+  <div id="error-panel" hidden>
+    <h2>Could not start the documentation server</h2>
+    <p id="error-reason"></p>
+    <p class="log"><code id="error-log-path"></code></p>
+    <button id="retry">Retry</button>
+    <button id="copy-log">Copy log path</button>
+  </div>
+
+  <script>
+    const { event, core } = window.__TAURI__;
+
+    event.listen("launch-error", ({ payload }) => {
+      document.getElementById("spinner").hidden = true;
+      document.getElementById("long-hint").hidden = true;
+      document.getElementById("error-reason").textContent =
+        payload.reason === "sidecar_exited"
+          ? "The background server exited before becoming ready."
+          : "The server took too long to respond.";
+      document.getElementById("error-log-path").textContent = payload.logPath;
+      document.getElementById("error-panel").hidden = false;
+    });
+
+    document.getElementById("retry").addEventListener("click", () => {
+      document.getElementById("error-panel").hidden = true;
+      document.getElementById("spinner").hidden = false;
+      core.invoke("retry_launch");
+    });
+
+    document.getElementById("copy-log").addEventListener("click", () => {
+      navigator.clipboard.writeText(
+        document.getElementById("error-log-path").textContent,
+      );
+    });
+
+    // Belt-and-suspenders: if we are still on the loading page after 20s,
+    // hint that things are taking longer than usual. Distinct from an error —
+    // the spinner keeps spinning, the panel stays hidden.
+    setTimeout(() => {
+      if (document.getElementById("error-panel").hidden) {
+        document.getElementById("long-hint").hidden = false;
+      }
+    }, 20_000);
+  </script>
+</body>
+```
+
+<Note>
+
+The 20-second "taking longer than usual" hint is visually distinct from the error panel. It nudges users who are on a slow first build (large dependency install, cold cargo cache) without falsely signalling failure. The error panel only appears when the backend has actually emitted `launch-error`.
+
+</Note>
+
+### Two prerequisites for the bundled page
+
+Because `frontend/index.html` is bundled and has no bundler, `window.__TAURI__` is the only way to reach the Tauri API. Two config details must line up:
+
+1. **`withGlobalTauri: true` in `tauri.conf.json`** — in Tauri v2 the default is `false`, meaning `window.__TAURI__` does not exist. If you forget this, `event.listen` and `core.invoke` silently do nothing and the panel never wires up.
+2. **`core:default` capability** — this already covers both `event:listen` and custom command invokes for the window. No additional capability grants are needed.
+
+See [IPC → Calling IPC from a bundled loading page](../frontend/ipc-commands.mdx#calling-ipc-from-a-bundled-loading-page) for the config details.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Rust as Rust Main
+  participant Window as Loading Page
+  participant Sidecar
+
+  Rust->>Sidecar: spawn_sidecar()
+  Rust->>Window: loading page visible
+  Note over Window: spinner + "Starting…"
+
+  alt Sidecar dies early
+    Sidecar--xRust: exits before /___ready is 200
+    Rust->>Window: emit("launch-error", { reason: "sidecar_exited" })
+    Window-->>User: error panel + Retry button
+    User->>Window: click Retry
+    Window->>Rust: invoke("retry_launch")
+    Rust->>Sidecar: do_refresh() on background thread
+  else Healthy but slow
+    Note over Window: after 20s, "Taking longer than usual…"
+    Sidecar-->>Rust: /___ready → 200
+    Rust->>Window: navigate(server_url)
+    Window-->>User: real content
+  end
+```

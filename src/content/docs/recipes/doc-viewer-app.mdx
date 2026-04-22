@@ -43,14 +43,16 @@ const PNPM_CMD: &str = "dev";
 
 In production, the app needs to find the `pnpm` binary on the user's system. A GUI app does not inherit the user's shell `PATH`, so you cannot rely on just calling `pnpm`.
 
-The strategy: check hardcoded well-known paths first, then fall back to `which`.
+The strategy: check hardcoded well-known paths first (including version-manager shims), then fall back to `which`.
 
 ```rust
 fn find_pnpm() -> Option<PathBuf> {
     // Check well-known installation paths first
+    let home = std::env::var("HOME").ok()?;
     let candidates = [
-        "/opt/homebrew/bin/pnpm",
-        "/usr/local/bin/pnpm",
+        "/opt/homebrew/bin/pnpm".to_string(),  // Apple Silicon Homebrew
+        "/usr/local/bin/pnpm".to_string(),     // Intel Homebrew
+        format!("{home}/.volta/bin/pnpm"),     // Volta shim
     ];
     for p in &candidates {
         let path = PathBuf::from(p);
@@ -78,7 +80,7 @@ fn find_pnpm() -> Option<PathBuf> {
 
 <Note>
 
-Hardcoded paths are checked first because `which` can be unreliable in GUI app contexts. The `/usr/bin/which` path is used (not just `which`) because the app's `PATH` may not include `/usr/bin`.
+Hardcoded paths are checked first because `which` can be unreliable in GUI app contexts. The `/usr/bin/which` path is used (not just `which`) because the app's `PATH` may not include `/usr/bin`. Include `$HOME/.volta/bin/pnpm` in the hardcoded list when your users commonly pin Node via Volta — Finder launches do not see Volta's shim injection.
 
 </Note>
 
@@ -351,6 +353,120 @@ When the window is destroyed, kill the sidecar:
 The `sidecar_for_exit` is an `Arc<Mutex<Option<Sidecar>>>` cloned from `AppState` before moving into the closure. This is needed because the `run()` closure captures by move and outlives the `setup()` closure.
 
 </Note>
+
+## Cold-Install Bootstrap in the Sidecar
+
+A bundled-sidecar doc viewer depends on `node_modules/` being populated. On a fresh clone — or after the user wipes the cache directory — `node_modules/astro/astro.js` does not exist, the sidecar fails to start, and the webview sits on the loading page forever.
+
+The fix is a pre-build guard inside the sidecar's own entry script that detects the missing entrypoint and runs `pnpm install` before proceeding. It keeps the UX in the "still building" state rather than failing silently.
+
+```js
+// doc/scripts/dev-stable.js
+import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import path from "node:path";
+
+const ROOT = path.resolve(import.meta.dirname, "..");
+
+function findPnpm() {
+  const candidates = [
+    "/opt/homebrew/bin/pnpm",
+    "/usr/local/bin/pnpm",
+    `${process.env.HOME}/.volta/bin/pnpm`,
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  // Fallback: /usr/bin/which
+  try {
+    const { execFileSync } = require("node:child_process");
+    const p = execFileSync("/usr/bin/which", ["pnpm"]).toString().trim();
+    return p && existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureNodeModules(root = ROOT) {
+  // Fast path: if astro.js is already installed, skip.
+  if (existsSync(path.join(root, "node_modules/astro/astro.js"))) return;
+
+  const pnpm = findPnpm();
+  if (!pnpm) {
+    console.error(
+      "pnpm not found — install Node.js and pnpm before launching.",
+    );
+    process.exit(1);
+  }
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(pnpm, ["install", "--prefer-offline"], {
+      cwd: root,
+      stdio: "inherit", // logs flow to sidecar.log
+    });
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`pnpm install exited with code ${code}`));
+    });
+  });
+}
+
+// Main
+try {
+  await serve(); // /___ready → 503 until build() finishes
+  await ensureNodeModules();
+  await build();
+} catch (err) {
+  console.error("sidecar fatal:", err);
+  process.exit(1);
+}
+```
+
+Three subtleties that are easy to get wrong:
+
+1. **Finder / launchd has a minimal PATH.** Inside a `.app` launched from Finder, `PATH` is typically just `/usr/bin:/bin:/usr/sbin:/sbin`. `pnpm` on the user's shell `PATH` is not reachable. Probe absolute paths first, fall back to `/usr/bin/which pnpm`, and bail out with a clear message if neither works. Mirrors the [`find_pnpm()` strategy in Rust](#finding-pnpm).
+
+2. **Loading page stays valid during install.** While `pnpm install` runs, the sidecar's `/___ready` endpoint keeps returning 503. Both the Rust readiness poller and the sidecar-side `LOADING_HTML` auto-refresh keep showing the "still building" spinner — no UX regression during the install. The install logs flow through `stdio: "inherit"` into the sidecar log, so they appear in the file that the error-state loading page would surface if something went wrong.
+
+3. **Clear fail-stop on missing pnpm.** If `findPnpm()` returns `null`, print a discoverable "pnpm not found" message to stderr and `process.exit(1)` so the [sidecar-death detector in `wait_for_ready`](../architecture/process-lifecycle.mdx#detecting-sidecar-death-in-the-readiness-loop) surfaces the failure to the user via `launch-error` within ~1 s. Hanging the sidecar with no exit would leave the UI stuck on the spinner.
+
+<Tip>
+
+The fast-path `existsSync(node_modules/astro/astro.js)` short-circuit costs a single `stat` call on every launch, which is worth the insurance. Skip it and you spawn a full `pnpm install` on every launch even when nothing needs to change — users will notice the extra second or two of spinner.
+
+</Tip>
+
+### Smoke-testing the cold path
+
+Because the cold-install path only runs when `node_modules/` is empty, it silently rots if you never test it. A minimal launch script with a `--cold` flag keeps the regression surface visible:
+
+```bash
+#!/usr/bin/env bash
+# test-launch.sh [--cold] [iterations]
+set -euo pipefail
+
+COLD=0
+ITERS=1
+for arg in "$@"; do
+  case "$arg" in
+    --cold) COLD=1 ;;
+    *) ITERS="$arg" ;;
+  esac
+done
+
+if [[ "$COLD" -eq 1 ]]; then
+  # Wipe once, before the first iteration, not per-iter — so multi-run
+  # smoke still exercises the cold path exactly once and then measures
+  # steady-state relaunches.
+  rm -rf "./node_modules"
+fi
+
+for i in $(seq 1 "$ITERS"); do
+  open -W -a "MyApp.app"
+done
+```
+
+This exercises the `ensureNodeModules` bootstrap on the first iteration and then measures healthy relaunches on subsequent ones. Run it in CI (or before each release) so the fresh-install path never breaks unnoticed.
 
 ## Config File
 

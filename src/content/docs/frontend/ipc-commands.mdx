@@ -342,6 +342,75 @@ pub fn draft_read(
 
 This keeps commands thin and focused on parameter handling, while the real logic lives in reusable functions that can be called from multiple commands.
 
+## Calling IPC from a Bundled Loading Page
+
+A wrapper app's bundled `frontend/index.html` (the loading page) often has no bundler — it is plain HTML served from `frontendDist` for exactly long enough to show a spinner before navigating to the real dev server. When that page needs to `listen` for backend events or `invoke` custom commands (e.g., `retry_launch` from an [error-state loading page](../architecture/loading-screen.mdx#error-state-and-retry)), it cannot `import` from the Tauri JS SDK. The only option is `window.__TAURI__`.
+
+Two config details have to line up, both easy to miss:
+
+### 1. Enable `withGlobalTauri`
+
+In Tauri v2, `app.withGlobalTauri` defaults to `false`. That means `window.__TAURI__` does not exist in the webview at all, so `window.__TAURI__.event.listen` is `TypeError: Cannot read properties of undefined`. The page fails silently — no frontend error surfaces unless you explicitly log the exception.
+
+```json
+// tauri.conf.json
+{
+  "app": {
+    "withGlobalTauri": true
+  }
+}
+```
+
+<Warning>
+
+This is a common "why are my event listeners not firing?" trap. If your bundled loading page uses `window.__TAURI__` at all and you did not explicitly set `withGlobalTauri: true`, nothing works and there is no frontend error. Add a defensive log at the top of the page so the failure is visible:
+
+```js
+if (!window.__TAURI__) {
+  console.error("window.__TAURI__ missing — set withGlobalTauri: true");
+}
+```
+
+</Warning>
+
+### 2. `core:default` already covers it
+
+For a typical loading page that listens for an event and invokes one or two custom commands, `core:default` in `capabilities/default.json` is sufficient. It grants `event:listen`, `event:unlisten`, and the invoke plumbing that custom `#[tauri::command]` functions use. Do **not** speculatively broaden the capability to things like `core:allow-emit-to-any` — they are not needed and only widen the surface the webview can reach.
+
+```json
+// capabilities/default.json — unchanged from the default
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
+```
+
+### Using the globals
+
+With those two in place, the bundled page can listen and invoke directly:
+
+```html
+<script>
+  const { event, core } = window.__TAURI__;
+
+  // Listen for a backend event
+  const unlisten = await event.listen("launch-error", ({ payload }) => {
+    // payload is whatever Rust sent via Emitter::emit
+  });
+
+  // Invoke a custom command
+  await core.invoke("retry_launch");
+</script>
+```
+
+<Note>
+
+`window.__TAURI__.core.invoke` is the same function as the ESM `invoke` re-exported by `@tauri-apps/api/core`. The payload serialization and return-value deserialization are identical — a bundled page does not get a degraded API, just a different import style.
+
+</Note>
+
 ## Key takeaways
 
 1. **Register every command** in `generate_handler!` -- there is no compile-time check
@@ -351,3 +420,4 @@ This keeps commands thin and focused on parameter handling, while the real logic
 5. **Use `.map_err(|e| format!(...))` ** to convert all error types to `String`
 6. **Derive `Serialize` with `serde(rename)`** for frontend-friendly field names
 7. **Keep commands thin** -- delegate to internal helper functions
+8. **Bundled loading pages need `withGlobalTauri: true`** -- or `window.__TAURI__` silently does not exist

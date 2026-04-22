@@ -43,14 +43,16 @@ const PNPM_CMD: &str = "dev";
 
 本番モードでは、アプリはユーザーのシステム上で `pnpm` バイナリを見つける必要がある。GUI アプリはユーザーのシェル `PATH` を継承しないため、単に `pnpm` を呼び出すだけでは動作しない。
 
-戦略は、まずハードコードされた既知のパスを確認し、次に `which` にフォールバックすることである。
+戦略は、まずハードコードされた既知のパス（バージョンマネージャのシムを含む）を確認し、次に `which` にフォールバックすることである。
 
 ```rust
 fn find_pnpm() -> Option<PathBuf> {
     // Check well-known installation paths first
+    let home = std::env::var("HOME").ok()?;
     let candidates = [
-        "/opt/homebrew/bin/pnpm",
-        "/usr/local/bin/pnpm",
+        "/opt/homebrew/bin/pnpm".to_string(),  // Apple Silicon Homebrew
+        "/usr/local/bin/pnpm".to_string(),     // Intel Homebrew
+        format!("{home}/.volta/bin/pnpm"),     // Volta シム
     ];
     for p in &candidates {
         let path = PathBuf::from(p);
@@ -78,7 +80,7 @@ fn find_pnpm() -> Option<PathBuf> {
 
 <Note>
 
-GUI アプリのコンテキストでは `which` が信頼できない場合があるため、ハードコードされたパスを最初に確認する。`/usr/bin/which`（`which` だけではなく）を使用するのは、アプリの `PATH` に `/usr/bin` が含まれていない可能性があるためである。
+GUI アプリのコンテキストでは `which` が信頼できない場合があるため、ハードコードされたパスを最初に確認する。`/usr/bin/which`（`which` だけではなく）を使用するのは、アプリの `PATH` に `/usr/bin` が含まれていない可能性があるためである。ユーザーが Volta で Node を pin しているケースが多い場合は `$HOME/.volta/bin/pnpm` もハードコードリストに含める -- Finder 起動は Volta のシム注入を見ない。
 
 </Note>
 
@@ -351,6 +353,119 @@ app.on_menu_event(|app_handle, event| match event.id().as_ref() {
 `sidecar_for_exit` は、クロージャに移動する前に `AppState` からクローンされた `Arc<Mutex<Option<Sidecar>>>` である。`run()` クロージャはムーブキャプチャを行い、`setup()` クロージャよりも長く存続するため、これが必要となる。
 
 </Note>
+
+## sidecar でのコールドインストールブートストラップ
+
+バンドル sidecar 型のドキュメントビューアーは、`node_modules/` が埋まっていることに依存する。クリーンな clone 直後 -- またはユーザーがキャッシュディレクトリを消去した後 -- では `node_modules/astro/astro.js` が存在せず、sidecar は起動に失敗し、webview は永遠にローディングページのままになる。
+
+解決策は、sidecar 自身のエントリースクリプト内にプレビルドガードを入れることだ。エントリーポイントの欠損を検出し、先に `pnpm install` を走らせてから次に進む。無言で失敗する代わりに UX を「ビルド中」の状態に保つ。
+
+```js
+// doc/scripts/dev-stable.js
+import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import path from "node:path";
+
+const ROOT = path.resolve(import.meta.dirname, "..");
+
+function findPnpm() {
+  const candidates = [
+    "/opt/homebrew/bin/pnpm",
+    "/usr/local/bin/pnpm",
+    `${process.env.HOME}/.volta/bin/pnpm`,
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  // Fallback: /usr/bin/which
+  try {
+    const { execFileSync } = require("node:child_process");
+    const p = execFileSync("/usr/bin/which", ["pnpm"]).toString().trim();
+    return p && existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureNodeModules(root = ROOT) {
+  // Fast path: astro.js が既にあればスキップ。
+  if (existsSync(path.join(root, "node_modules/astro/astro.js"))) return;
+
+  const pnpm = findPnpm();
+  if (!pnpm) {
+    console.error(
+      "pnpm not found — install Node.js and pnpm before launching.",
+    );
+    process.exit(1);
+  }
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(pnpm, ["install", "--prefer-offline"], {
+      cwd: root,
+      stdio: "inherit", // ログは sidecar.log に流れる
+    });
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`pnpm install exited with code ${code}`));
+    });
+  });
+}
+
+// Main
+try {
+  await serve(); // build() が終わるまで /___ready は 503
+  await ensureNodeModules();
+  await build();
+} catch (err) {
+  console.error("sidecar fatal:", err);
+  process.exit(1);
+}
+```
+
+間違えやすい勘所が 3 つある:
+
+1. **Finder / launchd の PATH は最小限。** Finder から起動された `.app` の内部では、`PATH` は典型的に `/usr/bin:/bin:/usr/sbin:/sbin` だけだ。ユーザーのシェル `PATH` に乗っている `pnpm` には届かない。絶対パスを先に探り、`/usr/bin/which pnpm` にフォールバックし、どちらも駄目なら明確なメッセージで終了する。[Rust 側の `find_pnpm()` 戦略](#pnpm-の検索)と同じ考え方だ。
+
+2. **インストール中もローディングページは有効のまま。** `pnpm install` が走っている間、sidecar の `/___ready` は 503 を返し続ける。Rust の準備完了ポーラーも sidecar 側の `LOADING_HTML` の自動リフレッシュも「まだビルド中」のスピナーを表示したまま -- インストール中の UX 劣化は起きない。インストールのログは `stdio: "inherit"` を通って sidecar ログに流れるので、エラー状態のローディングページが表示するファイルに残る。
+
+3. **pnpm 不在時の明確な停止。** `findPnpm()` が `null` を返したら、「pnpm not found」のメッセージを stderr に出して `process.exit(1)` する。そうすれば [`wait_for_ready` の sidecar 死亡検出器](../architecture/process-lifecycle.mdx#準備完了ループでの-sidecar-の死亡検出)が約 1 秒で `launch-error` 経由でユーザーに失敗を通知できる。無言でハングさせると UI はスピナーのまま固まる。
+
+<Tip>
+
+ファストパスの `existsSync(node_modules/astro/astro.js)` ショートサーキットは、起動ごとに `stat` を 1 回呼ぶだけのコストで保険になる。省略すると、何も変わっていないときでもフルの `pnpm install` が起動のたびに走り、ユーザーはスピナーの余分な 1〜2 秒に気付く。
+
+</Tip>
+
+### コールドパスのスモークテスト
+
+コールドインストールパスは `node_modules/` が空のときしか走らないため、テストしなければ無言で劣化する。`--cold` フラグを付けた最小の起動スクリプトで回帰の監視面を可視化する:
+
+```bash
+#!/usr/bin/env bash
+# test-launch.sh [--cold] [iterations]
+set -euo pipefail
+
+COLD=0
+ITERS=1
+for arg in "$@"; do
+  case "$arg" in
+    --cold) COLD=1 ;;
+    *) ITERS="$arg" ;;
+  esac
+done
+
+if [[ "$COLD" -eq 1 ]]; then
+  # イテレーション毎ではなく最初の 1 回前に 1 度だけ消す -- マルチラン時も
+  # コールドパスはちょうど 1 回だけ走り、残りは定常状態の再起動を測る。
+  rm -rf "./node_modules"
+fi
+
+for i in $(seq 1 "$ITERS"); do
+  open -W -a "MyApp.app"
+done
+```
+
+これで 1 回目のイテレーションで `ensureNodeModules` のブートストラップを走らせ、それ以降は健全な再起動を測る。CI（あるいは各リリース前）で回しておけば、フレッシュインストールのパスが気付かぬうちに壊れることはなくなる。
 
 ## 設定ファイル
 

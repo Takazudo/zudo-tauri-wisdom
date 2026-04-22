@@ -338,6 +338,102 @@ sequenceDiagram
   Rust->>Rust: app_handle.exit(0)
 ```
 
+## 準備完了ループでの sidecar の死亡検出
+
+素朴な準備完了ループは `/___ready` をポーリングし、`Ready` を返すかタイムアウトで諦めるだけである。sidecar が健全なときはそれで動くが、sidecar がすでに死んでいる場合 -- 典型的には初回起動時に `node_modules/` が存在しないケース -- タイムアウト時間をフルに消費してしまう。ユーザーは 120 秒間ローディングページを見せられ、その後アプリは死んだポートにナビゲートする。
+
+解決策は、子プロセスがすでに終了している場合に `wait_for_ready` が短絡的に抜けられるようにすることだ。sidecar ハンドルを渡し、各ポーリング毎に `Child::try_wait()` を呼ぶ:
+
+```rust
+pub enum ReadyResult {
+    Ready,
+    Timeout,
+    SidecarExited { code: Option<i32> },
+}
+
+pub fn wait_for_ready(
+    sidecar: &Arc<Mutex<Option<Sidecar>>>,
+    timeout: Duration,
+) -> ReadyResult {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        // ロックは狭いスコープで取得する -- curl 呼び出しをまたいで保持してはならない。
+        if let Ok(mut guard) = sidecar.lock() {
+            if let Some(s) = guard.as_mut() {
+                match s.child.try_wait() {
+                    Ok(Some(status)) => {
+                        return ReadyResult::SidecarExited {
+                            code: status.code(),
+                        };
+                    }
+                    Ok(None) => {} // まだ実行中
+                    Err(e) => log(&format!("try_wait error: {e}")),
+                }
+            }
+        }
+
+        let code = check_ready();
+        if code != "000" && code != "err" {
+            thread::sleep(Duration::from_secs(1));
+            return ReadyResult::Ready;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    ReadyResult::Timeout
+}
+```
+
+押さえるべき点は 3 つある:
+
+- **`try_wait()` は軽い。** `waitpid(WNOHANG)` 1 回分のシステムコールで、子プロセスが走っている間は `Ok(None)` を、終了した時点で `Ok(Some(status))` を返す。1 Hz のポーリングで呼んでも問題ない。
+- **ミューテックスのロックは狭いスコープで。** ロック取得 → `try_wait()` → `curl` を実行する前にガードを破棄する。ネットワーク呼び出しをまたいでガードを保持してしまうと、同じミューテックスを必要とするリフレッシュや終了などのパスをブロックする。
+- **両方の呼び出し元で `ReadyResult` を分岐処理する。** `setup()` の初回起動と `do_refresh()` のどちらも enum を消費し、死んだポートへナビゲートする代わりに `launch-error` イベントを発火する。フロントエンド側は[ローディング画面 → エラー状態とリトライ](./loading-screen.mdx#エラー状態とリトライ)を参照。
+
+<Warning>
+
+`curl` の呼び出しをまたいで `Mutex<Option<Sidecar>>` のガードを保持してはならない。ロックを握ったままの 1 秒の curl は、同じミューテックスに触れる必要があるリフレッシュやリトライ、ウィンドウクローズのイベントをすべて止めるのに十分な時間である。ガードは `try_wait()` の読み取りだけをカバーするスコープにする。
+
+</Warning>
+
+### launch-error イベントの発火
+
+`wait_for_ready` が `Timeout` または `SidecarExited` を返したら、死んだ URL へナビゲートする代わりに Tauri イベントを発火する。ローディングページがそれをリスンし、エラー状態に切り替わる（loading-screen.mdx 参照）。
+
+```rust
+use tauri::{AppHandle, Emitter, Manager};
+
+fn emit_launch_error(app_handle: &AppHandle, reason: &str) {
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.emit(
+            "launch-error",
+            serde_json::json!({
+                "reason": reason,
+                "logPath": sidecar_log_path().to_string_lossy(),
+            }),
+        );
+    }
+}
+
+// setup() / do_refresh() 内:
+match wait_for_ready(&state.sidecar, Duration::from_secs(120)) {
+    ReadyResult::Ready => {
+        let _ = w.navigate(server_url().parse().unwrap());
+    }
+    ReadyResult::Timeout => emit_launch_error(&handle, "timeout"),
+    ReadyResult::SidecarExited { .. } => {
+        emit_launch_error(&handle, "sidecar_exited");
+    }
+}
+```
+
+<Tip>
+
+`tauri::Emitter` は v2 のトレイトで、`AppHandle` と `WebviewWindow` の両方に `.emit()` を追加する。アプリハンドルからではなくウィンドウから emit することで、そのウィンドウのフロントエンドリスナーに狙って届けられる。
+
+`serde_json` は `tauri` 経由で推移的に入ってくるので、`dev-dependencies` から `dependencies` に昇格させてもコンパイル時間は変わらない。カスタム構造体を定義する代わりに `serde_json::json!` でペイロードを組み立てられるようになる。
+
+</Tip>
+
 ## ロギング
 
 アプリ自体のライフサイクルイベントと sidecar の出力は、別々のファイルに記録すべきである:

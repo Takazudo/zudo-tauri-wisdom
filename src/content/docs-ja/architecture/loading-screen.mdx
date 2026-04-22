@@ -280,3 +280,137 @@ fn do_refresh(app_handle: &AppHandle) {
 ```
 
 この処理は、古い sidecar を kill し、ポートをクリーンアップし、新しい sidecar を起動し、準備完了を待ち、その後ナビゲートする。リフレッシュのタイムアウト（15秒）は初回起動のタイムアウト（120秒）より短い。これはサーバーが2回目以降の起動ではより速く起動することが期待されるためである。
+
+## エラー状態とリトライ
+
+「スピナー+テキスト」だけの最小ローディングページはハッピーパスでは機能するが、sidecar が既に死んでいたり、ビルドがストールしている状況ではユーザーに嘘をつくことになる。sidecar が健全にビルドしているのか、クラッシュして戻ってこないのか、どちらの場合も同じスピナーが見える。
+
+次のレベルのパターンは、ローディングページをエラーパネルも兼ねるものにすることだ。スピナーはハッピーパスで、非表示のエラーパネルがバックエンドから発火される `launch-error` イベントをリスンし、リトライボタン付きの操作可能な状態に切り替わる。
+
+### バックエンドの契約
+
+Rust 側は[準備完了ポーリングで sidecar の死亡やタイムアウトを検出した](./process-lifecycle.mdx#準備完了ループでの-sidecar-の死亡検出)際に、ナビゲートする代わりに `launch-error` イベントを発火する:
+
+```rust
+// イベントペイロードの形
+// { reason: "timeout" | "sidecar_exited", logPath: "/path/to/sidecar.log" }
+```
+
+対応する `retry_launch` コマンドがリスタートをトリガーするので、フロントエンドはリトライボタンを用意できる:
+
+```rust
+#[tauri::command]
+fn retry_launch(app_handle: AppHandle) {
+    // バックグラウンドスレッドで実行する -- IPC スレッドを絶対にブロックしない。
+    // do_refresh() は失敗時に launch-error を再発火するため、
+    // リトライが再度失敗した場合も自然に UI がエラー状態へ戻る。
+    thread::spawn(move || {
+        do_refresh(&app_handle);
+    });
+}
+```
+
+<Warning>
+
+長時間かかるリスタートを IPC スレッド上でインラインに走らせてはならない。Tauri の IPC ランタイムは小さなスレッドプールでコマンドをディスパッチする。sidecar を起動して 15 秒の準備完了を待ってから return する `retry_launch` は、その時間帯、他のコマンドをすべてブロックする。処理はバックグラウンドの `std::thread` にスポーンし、すぐに return すること。
+
+</Warning>
+
+### フロントエンドのパネル
+
+ローディング HTML に非表示のエラーパネルを追加する。インライン CSS と JS のみで構成する -- このページはバンドル済みでバンドラがなく、import は選択肢にない:
+
+```html
+<!-- frontend/index.html (省略版) -->
+<body>
+  <div id="spinner" class="spinner"></div>
+  <div id="long-hint" class="sub" hidden>Taking longer than usual…</div>
+
+  <div id="error-panel" hidden>
+    <h2>Could not start the documentation server</h2>
+    <p id="error-reason"></p>
+    <p class="log"><code id="error-log-path"></code></p>
+    <button id="retry">Retry</button>
+    <button id="copy-log">Copy log path</button>
+  </div>
+
+  <script>
+    const { event, core } = window.__TAURI__;
+
+    event.listen("launch-error", ({ payload }) => {
+      document.getElementById("spinner").hidden = true;
+      document.getElementById("long-hint").hidden = true;
+      document.getElementById("error-reason").textContent =
+        payload.reason === "sidecar_exited"
+          ? "The background server exited before becoming ready."
+          : "The server took too long to respond.";
+      document.getElementById("error-log-path").textContent = payload.logPath;
+      document.getElementById("error-panel").hidden = false;
+    });
+
+    document.getElementById("retry").addEventListener("click", () => {
+      document.getElementById("error-panel").hidden = true;
+      document.getElementById("spinner").hidden = false;
+      core.invoke("retry_launch");
+    });
+
+    document.getElementById("copy-log").addEventListener("click", () => {
+      navigator.clipboard.writeText(
+        document.getElementById("error-log-path").textContent,
+      );
+    });
+
+    // ベルト・アンド・サスペンダーズ: 20 秒経ってもローディングページのまま
+    // だったら、通常より時間がかかっていることをほのめかす。エラーとは別物 --
+    // スピナーは回ったままで、パネルは非表示のまま。
+    setTimeout(() => {
+      if (document.getElementById("error-panel").hidden) {
+        document.getElementById("long-hint").hidden = false;
+      }
+    }, 20_000);
+  </script>
+</body>
+```
+
+<Note>
+
+20 秒の「時間がかかっています」ヒントは、エラーパネルとは視覚的に区別する。初回の遅いビルド（大きな依存関係インストール、cargo キャッシュが冷えている等）のユーザーに、失敗シグナルを誤って送らずに状況を伝えるのが狙いだ。エラーパネルはバックエンドが実際に `launch-error` を発火したときだけ表示する。
+
+</Note>
+
+### バンドルページの 2 つの前提条件
+
+`frontend/index.html` はバンドル済みでバンドラがないため、Tauri API に到達する手段は `window.__TAURI__` しかない。設定で 2 つのディテールを揃える必要がある:
+
+1. **`tauri.conf.json` の `withGlobalTauri: true`** -- Tauri v2 ではデフォルトが `false` で、`window.__TAURI__` そのものが存在しない状態になる。これを忘れると `event.listen` と `core.invoke` は無言で何もせず、パネルの配線が成立しない。
+2. **`core:default` ケイパビリティ** -- `event:listen` とカスタムコマンドの invoke の両方がこれでカバーされている。追加のケイパビリティ付与は不要。
+
+設定の詳細は [IPC → バンドル済みローディングページからの IPC 呼び出し](../frontend/ipc-commands.mdx#バンドル済みローディングページからの-ipc-呼び出し)を参照。
+
+### シーケンス
+
+```mermaid
+sequenceDiagram
+  participant User as ユーザー
+  participant Rust as Rust メイン
+  participant Window as ローディングページ
+  participant Sidecar
+
+  Rust->>Sidecar: spawn_sidecar()
+  Rust->>Window: ローディングページ表示
+  Note over Window: スピナー + "Starting…"
+
+  alt sidecar が早期に死亡
+    Sidecar--xRust: /___ready が 200 を返す前に終了
+    Rust->>Window: emit("launch-error", { reason: "sidecar_exited" })
+    Window-->>User: エラーパネル + リトライボタン
+    User->>Window: リトライをクリック
+    Window->>Rust: invoke("retry_launch")
+    Rust->>Sidecar: バックグラウンドスレッドで do_refresh()
+  else 健全だが遅い
+    Note over Window: 20秒後、"Taking longer than usual…"
+    Sidecar-->>Rust: /___ready → 200
+    Rust->>Window: navigate(server_url)
+    Window-->>User: 実コンテンツ
+  end
+```

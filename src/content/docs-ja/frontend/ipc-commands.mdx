@@ -342,6 +342,75 @@ pub fn draft_read(
 
 これにより、コマンドはパラメータ処理に集中した薄いものになり、実際のロジックは複数のコマンドから呼び出し可能な再利用可能な関数に配置される。
 
+## バンドル済みローディングページからの IPC 呼び出し
+
+ラッパーアプリのバンドル済み `frontend/index.html`（ローディングページ）は、しばしばバンドラを持たない -- スピナーを表示して実際の開発サーバーにナビゲートするまでのごく短い時間のために `frontendDist` から配信されるプレーンな HTML である。このページからバックエンドのイベントを `listen` したり、カスタムコマンドを `invoke` する必要がある場合（[エラー状態のローディングページ](../architecture/loading-screen.mdx#エラー状態とリトライ)の `retry_launch` など）、Tauri JS SDK を `import` することはできない。唯一の選択肢は `window.__TAURI__` である。
+
+設定で 2 つのディテールを揃える必要がある。どちらも見落としやすい:
+
+### 1. `withGlobalTauri` を有効にする
+
+Tauri v2 では `app.withGlobalTauri` のデフォルトは `false`。これはつまり `window.__TAURI__` が webview 内にそもそも存在しないということで、`window.__TAURI__.event.listen` は `TypeError: Cannot read properties of undefined` になる。ページは無言で失敗する -- 例外を明示的にログに出していない限り、フロントエンドにエラーは現れない。
+
+```json
+// tauri.conf.json
+{
+  "app": {
+    "withGlobalTauri": true
+  }
+}
+```
+
+<Warning>
+
+これは典型的な「なぜイベントリスナーが動かないのか」の罠である。バンドル済みローディングページが `window.__TAURI__` を少しでも使っていて、かつ `withGlobalTauri: true` を明示的に設定していないなら、何も動かず、フロントエンドにはエラーも出ない。失敗が可視化されるようにページ冒頭で防御的ログを仕込むとよい:
+
+```js
+if (!window.__TAURI__) {
+  console.error("window.__TAURI__ missing — set withGlobalTauri: true");
+}
+```
+
+</Warning>
+
+### 2. `core:default` で既にカバーされている
+
+典型的なローディングページ（1 つのイベントをリスンし、1〜2 個のカスタムコマンドを invoke する）では、`capabilities/default.json` の `core:default` で十分である。`event:listen`、`event:unlisten`、そしてカスタム `#[tauri::command]` 関数が使う invoke の配線がすべて付与される。`core:allow-emit-to-any` のような広すぎる権限を先回りで付与してはいけない -- 必要ないし、webview が触れる面積を無用に広げるだけだ。
+
+```json
+// capabilities/default.json -- デフォルトから変更なし
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
+```
+
+### グローバルの使い方
+
+この 2 点が揃っていれば、バンドル済みページから直接リスンと invoke ができる:
+
+```html
+<script>
+  const { event, core } = window.__TAURI__;
+
+  // バックエンドイベントをリスン
+  const unlisten = await event.listen("launch-error", ({ payload }) => {
+    // payload は Rust が Emitter::emit で送ったもの
+  });
+
+  // カスタムコマンドを invoke
+  await core.invoke("retry_launch");
+</script>
+```
+
+<Note>
+
+`window.__TAURI__.core.invoke` は `@tauri-apps/api/core` が再エクスポートしている ESM 版の `invoke` と同じ関数である。ペイロードのシリアライズも戻り値のデシリアライズも同一 -- バンドル済みページは劣化した API を掴まされるわけではなく、import スタイルが違うだけだ。
+
+</Note>
+
 ## 重要なポイント
 
 1. **すべてのコマンドを `generate_handler!` に登録する** -- コンパイル時チェックは存在しない
@@ -351,3 +420,4 @@ pub fn draft_read(
 5. **`.map_err(|e| format!(...))` を使用してすべてのエラー型を `String` に変換する**
 6. **フロントエンドに適したフィールド名のために `Serialize` を `serde(rename)` 付きで derive する**
 7. **コマンドは薄く保つ** -- 内部ヘルパー関数に委譲する
+8. **バンドル済みローディングページには `withGlobalTauri: true` が必要** -- そうでなければ `window.__TAURI__` は無言で存在しない
