@@ -6,6 +6,8 @@ sidebar_position: 9
 
 ## The symptom
 
+![Screenshot of a Tauri app's search input showing the WebKit autofill pill -- a small "Packab ×" bubble floating below the input after typing the partial query "packab".](./webkit-autofill-pill.png)
+
 You add a search input to a Tauri app on macOS. As soon as the user types one or two characters, a small floating pill appears below the input -- a previously typed value with an `×` to dismiss it. Clicking the pill fills the input with that value.
 
 It looks out of place. The app already shows its own search-results dropdown right below the input, and the pill overlaps with it. Worse, the suggested value is whatever the user happened to type last time, which has nothing to do with the actual content the user is searching against.
