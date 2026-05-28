@@ -365,3 +365,7 @@ FNV-1a uses **fixed constants** — the 64-bit offset basis `0xcbf29ce484222325`
 Do not swap in `DefaultHasher` for "simplicity." It compiles, the tests in a single process pass, and the bug only shows up as a quietly useless cache in production — exactly the kind of regression that survives review. Keep the deterministic hash and a test that asserts the same input yields the same output.
 
 </Warning>
+
+## See also
+
+The [Asset Protocol and CSP Scope](../frontend/asset-protocol.mdx) page explains the `tauri.conf.json` config that makes `convertFileSrc` URLs actually load -- including the `csp: null` shortcut used by this recipe and what you need to change for a hardened build.

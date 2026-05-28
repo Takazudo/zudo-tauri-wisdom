@@ -378,7 +378,7 @@ if (!window.__TAURI__) {
 典型的なローディングページ（1 つのイベントをリスンし、1〜2 個のカスタムコマンドを invoke する）では、`capabilities/default.json` の `core:default` で十分である。`event:listen`、`event:unlisten`、そしてカスタム `#[tauri::command]` 関数が使う invoke の配線がすべて付与される。`core:allow-emit-to-any` のような広すぎる権限を先回りで付与してはいけない -- 必要ないし、webview が触れる面積を無用に広げるだけだ。
 
 ```json
-// capabilities/default.json -- デフォルトから変更なし
+// capabilities/default.json — unchanged from the default
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
@@ -395,12 +395,12 @@ if (!window.__TAURI__) {
 <script>
   const { event, core } = window.__TAURI__;
 
-  // バックエンドイベントをリスン
+  // Listen for a backend event
   const unlisten = await event.listen("launch-error", ({ payload }) => {
-    // payload は Rust が Emitter::emit で送ったもの
+    // payload is whatever Rust sent via Emitter::emit
   });
 
-  // カスタムコマンドを invoke
+  // Invoke a custom command
   await core.invoke("retry_launch");
 </script>
 ```

@@ -24,6 +24,22 @@ Tauri uses different rendering engines per platform (WebKit on macOS/Linux, Chro
 
 Tauri v2 uses a capabilities system to control what the frontend can access. The [Capabilities](/frontend/capabilities/) page covers the permission model, plugin access, and security considerations.
 
+### Asset Protocol and CSP Scope
+
+`convertFileSrc` turns a local file path into an `asset://` URL the WebView can load directly. Whether that URL actually loads depends on your Content Security Policy and the `assetProtocol` scope in `tauri.conf.json`. The [Asset Protocol](/frontend/asset-protocol/) page explains the `csp: null` shortcut, the allowlist approach for hardened builds, and why images go blank when you tighten security.
+
+### Bypassing CORS with plugin-http
+
+A plain browser `fetch` in the Tauri WebView is subject to CORS just like any browser. The [plugin-http CORS](/frontend/http-plugin-cors/) page shows how `@tauri-apps/plugin-http` routes requests through Rust's `reqwest` client, bypassing the WebView's CORS enforcement entirely.
+
+### Deep Links and the useEffect Teardown Race
+
+A custom URL scheme lets the OS launch or foreground your app and deliver a URL. The [Deep Links](/frontend/deep-links/) page covers `tauri-plugin-deep-link` registration, platform guards, and the async teardown race that leaks the URL handler in a React effect.
+
+### Native File Drag-and-Drop
+
+Browser `onDrop` does not fire for OS file drops in a Tauri WebView -- the native window layer intercepts the drag first. The [Drag and Drop](/frontend/drag-drop/) page explains why, shows the correct `onDragDropEvent` subscription, and covers a dual-handler pattern for mock/REST dev modes.
+
 ## The IPC model
 
 Tauri v2 uses a message-passing architecture between the frontend and the Rust backend:

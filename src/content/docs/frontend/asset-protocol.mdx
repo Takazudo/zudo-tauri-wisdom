@@ -78,3 +78,7 @@ The failure is silent because a blocked `<img>` does not throw; the element just
 2. **A real CSP requires `assetProtocol.enable: true` plus a `scope`** -- the protocol is off by default once CSP is active.
 3. **`img-src` must list `asset:` and `http://asset.localhost`** -- the cross-platform tokens that let the WebView render the URL.
 4. **The dev-to-prod trap is silent** -- images that worked under `csp: null` go blank under a strict CSP with no error; check the devtools console.
+
+## See also
+
+The [Image Viewer App recipe](../recipes/image-viewer-app.mdx) shows how `convertFileSrc` and the asset protocol are used end-to-end in a real app with HEIC decoding and a two-tier thumbnail cache.

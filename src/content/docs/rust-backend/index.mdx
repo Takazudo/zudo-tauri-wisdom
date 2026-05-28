@@ -28,6 +28,14 @@ File system watchers fire rapidly and redundantly. The [File Watchers](/rust-bac
 
 Creating windows programmatically gives you control over splash screens, dev server polling, and platform-specific behaviors. The [Window Management](/rust-backend/window-management/) page covers the full window lifecycle.
 
+### External-Tool Preview/Accept/Cancel Actions
+
+A monorepo desktop app often ships its own CLI tools alongside the Tauri shell. The [External-Tool Actions](/rust-backend/external-tool-actions/) page covers running bundled Node CLIs as one-shot subprocesses, staging their output in the system temp dir, and wiring a preview → accept → cancel contract so destructive file overwrites stay under explicit user control.
+
+### Persisting Settings to the OS Config Directory
+
+Global app settings belong in the OS-standard per-user config directory, not next to the binary. The [Settings Persistence](/rust-backend/settings-persistence/) page covers reading and writing `settings.json` with the `dirs` crate, falling back to defaults on a corrupt file, and validating paths before persisting them.
+
 ## Common architecture
 
 A typical Tauri v2 Rust backend follows this structure:

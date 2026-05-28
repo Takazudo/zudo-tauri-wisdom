@@ -24,20 +24,20 @@ cargo tauri ios init
 src-tauri/
   Cargo.toml
   tauri.conf.json
-  Info.ios.plist           # (必要なときに自分で作る)
+  Info.ios.plist           # (you create this yourself when needed)
   src/
-    lib.rs                 # モバイル用エントリポイントとして `run` をエクスポート
+    lib.rs                 # must export `run` for mobile entry point
   gen/
-    apple/                 # iOS 固有の出力
+    apple/                 # iOS-specific output
       Podfile
-      project.yml          # XcodeGen プロジェクト定義
-      <AppName>.xcodeproj/ # 生成された Xcode プロジェクト
+      project.yml          # XcodeGen project definition
+      <AppName>.xcodeproj/ # generated Xcode project
       <AppName>_iOS/
         <AppName>_iOS.entitlements  # capability entitlements
       Assets.xcassets/
       LaunchScreen.storyboard
       Sources/
-        main.mm            # Rust への橋渡しをする Objective-C++ エントリポイント
+        main.mm            # Objective-C++ entry point bridging to Rust
 ```
 
 `gen/apple/` ディレクトリは **`project.yml` から生成される**。`cargo tauri ios init` や `cargo tauri ios dev/build` を実行するたびに XcodeGen が `project.yml` を読み直し `.xcodeproj` を生成する。`.xcodeproj` を直接編集した内容は上書きされるリスクがある。

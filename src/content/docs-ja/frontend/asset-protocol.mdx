@@ -78,3 +78,7 @@ sidebar_position: 10
 2. **本物の CSP には `assetProtocol.enable: true` と`scope` が必要** -- CSP が有効になるとプロトコルはデフォルトでオフになる。
 3. **`img-src` には `asset:` と `http://asset.localhost` を列挙する** -- WebView が URL をレンダリングできるようにするクロスプラットフォームのトークン。
 4. **開発から本番への罠はサイレント** -- `csp: null` で動いていた画像が厳格な CSP 下でエラーなく真っ白になる。devtools コンソールを確認すること。
+
+## 関連ページ
+
+[イメージビューアーアプリのレシピ](../recipes/image-viewer-app.mdx)では、HEIC デコードと二層サムネイルキャッシュを持つ実際のアプリで `convertFileSrc` とアセットプロトコルをエンドツーエンドでどう使うかを示している。
