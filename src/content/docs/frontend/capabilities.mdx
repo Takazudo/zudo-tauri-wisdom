@@ -197,6 +197,98 @@ capabilities/
 
 This gives the settings window only core permissions, without access to dialog, shell, or other plugins.
 
+## Platform-scoped capabilities
+
+A capability file can scope itself to specific platforms with a `"platforms"` field. This lets a single project grant different permissions on desktop versus mobile, where the available native APIs differ.
+
+```json
+// capabilities/default.json — desktop
+{
+  "identifier": "default",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*/**"]
+  },
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "shell:default",
+    "haptics:default",
+    "notification:default"
+  ]
+}
+```
+
+```json
+// capabilities/ios.json — iOS
+{
+  "identifier": "ios",
+  "platforms": ["iOS"],
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}
+```
+
+```json
+// capabilities/android.json — Android
+{
+  "identifier": "android",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}
+```
+
+The desktop file grants `shell:default`, `haptics:default`, and `notification:default` plus `remote.urls` for the dev server. The `ios.json` file **deliberately omits `shell:default`**: iOS has no process-spawning or PTY API inside its sandbox, so a shell permission there would grant access to a capability that cannot exist.
+
+`haptics:default` and `notification:default` appear in the desktop file too because those plugins are registered on every platform. On desktop the haptic calls are simply silent no-ops -- there is no haptic hardware -- but the permission must still be granted, or the IPC call would be rejected at the capability layer.
+
+### Defense in depth: two layers that must agree
+
+Dropping `shell:default` from the iOS capability is only half of the story. The Rust side does the same thing at compile time, and the two layers must agree.
+
+```rust
+// main.rs — the shell plugin is not even compiled on iOS
+let builder = tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_haptics::init())
+    .plugin(tauri_plugin_notification::init());
+
+// No PTY / process-spawning API exists in the iOS sandbox, so the
+// shell plugin is excluded from the build entirely on that target.
+#[cfg(not(target_os = "ios"))]
+let builder = builder.plugin(tauri_plugin_shell::init());
+```
+
+- **Layer 1 (capability):** `ios.json` omits `shell:default`, so the Tauri permission system blocks shell calls at the capability level.
+- **Layer 2 (Rust build):** `#[cfg(not(target_os = "ios"))]` keeps the shell plugin out of the iOS binary, so there is nothing to call even if a permission slipped through.
+
+Leaving `shell` in either layer alone is a footgun: a permission with no plugin behind it, or a plugin with no permission gating it. Keeping both layers consistent means a shell command on iOS fails the same way regardless of which check you forget.
+
+### `#[cfg]` inside `generate_handler!`
+
+The same `#[cfg(...)]` attributes work *inside* the `tauri::generate_handler!` macro, letting you drop individual commands per-platform. This is non-obvious but legal: the macro expands the attribute on each entry, so the excluded commands are never registered on the target where they cannot run.
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    commands::files::messages_list,
+    commands::settings::settings_get,
+    // ...other cross-platform commands...
+
+    // Build-pipeline commands spawn subprocesses, so they are not
+    // compiled on iOS — the attribute drops them from the handler list.
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_build_and_install,
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_cancel_build,
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_check_toolchain,
+])
+```
+
+On iOS, these commands do not exist in the handler at all — calling them from the frontend fails with a "command not found" error rather than running shell-backed code that has no business existing on the platform.
+
 ## Troubleshooting
 
 ### "IPC call failed" or "Permission denied"

@@ -411,6 +411,64 @@ With those two in place, the bundled page can listen and invoke directly:
 
 </Note>
 
+## Frontend plugin calls: clipboard
+
+Not every frontend-to-backend call is a custom `#[tauri::command]`. Tauri's official plugins expose ready-made functions you `import` directly from the JS SDK. Writing to the clipboard is the canonical example: a "copy export to clipboard" button uses `writeText` from `@tauri-apps/plugin-clipboard-manager`.
+
+```tsx
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+
+async function handleCopy(content: string) {
+  if (!content) return;
+  try {
+    await writeText(content);
+    // show a transient "Copied!" state
+  } catch {
+    console.error("Failed to copy to clipboard");
+  }
+}
+```
+
+### Why the plugin instead of `navigator.clipboard`
+
+The browser's `navigator.clipboard.writeText` exists in the WebView, but it is unreliable there. `navigator.clipboard` is gated by the secure-context requirement and by browser-style permission prompts, neither of which behaves consistently across the macOS, Windows, and Linux WebView implementations Tauri ships on. Calls can silently reject or hang depending on the platform and how the window was focused.
+
+The plugin routes the write through the native Rust clipboard API instead of the WebView's JS clipboard. That sidesteps the secure-context and permission quirks entirely, so the same call works the same way on every platform.
+
+### Capability and plugin init
+
+Two pieces of setup are required, and a missing one fails at runtime, not compile time.
+
+First, grant the `clipboard-manager:default` permission in the window's capability file:
+
+```json
+// capabilities/default.json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default", "clipboard-manager:default"]
+}
+```
+
+Second, register the plugin in `main.rs` (and add the `tauri-plugin-clipboard-manager` crate plus the `@tauri-apps/plugin-clipboard-manager` npm package):
+
+```rust
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        // ... other plugins, .invoke_handler(...), etc.
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+<Warning>
+
+If the capability is missing, `writeText` rejects with a permission error at runtime. If the plugin is not initialized, the call fails because the underlying command does not exist. Neither shows up at compile time -- the failure only surfaces when the button is clicked.
+
+</Warning>
+
 ## Key takeaways
 
 1. **Register every command** in `generate_handler!` -- there is no compile-time check

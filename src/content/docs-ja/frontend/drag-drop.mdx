@@ -1,0 +1,163 @@
+---
+title: ネイティブのファイルドラッグ&ドロップ
+description: Tauri WebView でブラウザの onDrop が発火しない理由と、onDragDropEvent で OS のファイルドロップを扱う方法。さらに mock/REST 開発モード向けの二重ハンドラ。
+sidebar_position: 13
+---
+
+## 半日を溶かすバグ
+
+当然のものを書く -- コンテナに `onDrop` と `onDragOver` を付け、Finder からファイルをアプリにドラッグする。すると何も起きない。イベントが一切発火しない。あちこちに `console.log` を仕込み、`preventDefault` を確認し、CSS のオーバーレイがポインターイベントを飲み込んでいるのではと疑う。こうして時間が過ぎていく。
+
+原因はあなたのコードではない。**Tauri WebView では、OS のファイルドロップに対してブラウザの `onDrop` / `ondragover` DOM イベントが発火しない。** ネイティブのウィンドウ層がドラッグを横取りし、WebView がそれを見ることはない。Web 開発者は反射的に `onDrop` に手を伸ばし、何も起きないのを見て半日を溶かす。
+
+<Warning>
+
+Tauri で OS のファイルドロップを扱うときは、ブラウザの `onDrop` イベントに **頼ってはならない**。代わりに WebView のネイティブなドラッグドロップイベントを購読する：
+
+```ts
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+
+getCurrentWebviewWindow().onDragDropEvent((event) => {
+  // event.payload.paths is a string[] of FILESYSTEM PATHS
+});
+```
+
+</Warning>
+
+## バイトではなくパス
+
+Web との最も重要な違いはこれだ。ネイティブイベントが渡してくるのは **ファイルシステム上のパス** であって、`File` オブジェクトではない。
+
+ブラウザのドロップは `File` インスタンスを渡してくる -- その中身はレンダラ側で `FileReader` / `file.arrayBuffer()` を使って読み取る。一方 Tauri のネイティブドロップが渡すのは `event.payload.paths`、すなわち絶対パス文字列の配列だ。ペイロードにバイトは一切含まれない。中身を得るには、バックエンドでファイルを読む Rust コマンドを呼ぶ（画像などのアセットは、バイトを JS に往復させるのではなく、バックエンドで取り込み／コピーする）。
+
+これによりハンドラの形が反転する。`file.type` を調べる代わりに、パス文字列の **拡張子** で振り分け、適切な Rust コマンドへ振り分ける：
+
+```ts
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getBackend } from "@takazudo/backend-bridge";
+
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+const TEXT_EXTENSIONS = new Set(["md", "mdx", "txt", "markdown"]);
+
+function extOf(filePath: string): string {
+  return filePath.split(".").pop()?.toLowerCase() ?? "";
+}
+
+useEffect(() => {
+  // Browser onDrop does not fire in the Tauri WebView for file drops,
+  // so subscribe to the native event. It provides filesystem paths,
+  // not File objects.
+  if (!("__TAURI_INTERNALS__" in window)) return;
+
+  let unlisten: (() => void) | null = null;
+
+  getCurrentWebviewWindow()
+    .onDragDropEvent(async (event) => {
+      if (event.payload.type !== "drop") return;
+
+      const imagePaths = event.payload.paths.filter((p) =>
+        IMAGE_EXTENSIONS.has(extOf(p)),
+      );
+      const textPaths = event.payload.paths.filter((p) =>
+        TEXT_EXTENSIONS.has(extOf(p)),
+      );
+
+      for (const filePath of imagePaths) {
+        // Backend copies the file into the asset store and returns its name —
+        // the image bytes never travel through JS.
+        const savedName = await getBackend().assets.importFile(filePath);
+        insertImageRef(savedName);
+      }
+
+      for (const filePath of textPaths) {
+        // Backend reads the file from disk by path and returns its text.
+        const text = await getBackend().files.readText(filePath);
+        const basename = filePath.split(/[\\/]/).pop() ?? filePath;
+        await onDropTextFile?.(text, basename);
+      }
+    })
+    .then((fn) => {
+      unlisten = fn;
+    });
+
+  return () => {
+    unlisten?.();
+  };
+}, [insertImageRef, onDropTextFile]);
+```
+
+`event.payload.type` は `"over"`・`"leave"`・`"drop"` のいずれかだ -- `"over"` / `"leave"` でドラッグオーバーのハイライトを制御し、`"drop"` で実際の処理を行う。
+
+## なぜ二重ハンドラなのか
+
+本番ではネイティブイベントが正解なら、なぜブラウザの `onDrop` を残すのか。それは、このアプリが常に WebView の中で動くとは限らないからだ。
+
+[バックエンドブリッジ／アダプタパターン](../architecture/backend-bridge.mdx) により、同じフロントエンドが 3 つのモードで動作する：フル Tauri（ネイティブ WebView）、mock（本物のブラウザ + インメモリのバックエンド）、REST（本物のブラウザが HTTP 経由で Rust と通信）。**mock と REST のモードには WebView が存在しない -- コードは通常のブラウザタブで動き、そこでは `onDragDropEvent` は決して発火せず、得られるイベントはブラウザの `onDrop` だけだ。**
+
+そのため両方を残す：
+
+- 本番向けに、`"__TAURI_INTERNALS__" in window` でガードした **ネイティブ** の `onDragDropEvent` ハンドラ。
+- mock/REST 開発モード向けの **ブラウザ** の `onDrop` フォールバック。ここではドロップが本物の `File` オブジェクトを渡してくるので、`FileReader` / `file.text()` で読み取る。
+
+```tsx
+import { useCallback } from "react";
+import { getBackend } from "@takazudo/backend-bridge";
+
+const handleDrop = useCallback(
+  async (e: React.DragEvent) => {
+    e.preventDefault();
+
+    // In Tauri the native onDragDropEvent handler already handled the drop;
+    // bail out so we don't process it twice.
+    if ("__TAURI_INTERNALS__" in window) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        // Browser path: read bytes in the renderer, then hand them to the backend.
+        const buf = await file.arrayBuffer();
+        await getBackend().assets.saveFile(file.name, buf);
+      } else {
+        const text = await file.text();
+        await onDropTextFile?.(text, file.name);
+      }
+    }
+  },
+  [onDropTextFile],
+);
+
+return <div onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>{/* ... */}</div>;
+```
+
+Tauri 上で動いているときの早期 `return` に注目してほしい -- 両方のハンドラがマウントされているが、動くべきは一方だけだ。本番ではネイティブハンドラがドロップを担い、`onDrop` 側のガードが二重処理を防ぐ。（本番ではそもそもファイルドロップに対してブラウザの `onDrop` は発火しないが、このガードは意図を明示し、エッジケースに対して堅牢になる。）
+
+<Tip>
+
+2 つの経路は同じ Rust コマンドに収束する -- パスからの `assets.importFile` / `files.readText`、あるいはバイトからの `assets.saveFile` だ。両者を 1 つの「このコンテンツを取り込む」ルーチンに集約し、二重ハンドラが分岐した 2 つのコード経路にならないようにする。
+
+</Tip>
+
+## `dragDropEnabled` を有効のままにする
+
+ネイティブイベントは、WebView のドラッグドロップ処理がウィンドウ設定で有効になっている場合にのみ発火する。`tauri.conf.json` では：
+
+```json
+{
+  "app": {
+    "windows": [
+      {
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}
+```
+
+`dragDropEnabled` のデフォルトは `true` なので、通常は何もしなくてよい。だが、これは無効にしたくなる設定でもある -- たとえば、何かのライブラリの HTML5 ドラッグ&ドロップ（並べ替え可能なリスト、ドラッグ可能なパネル）がネイティブハンドラと衝突しているように見えるときだ。**これを無効にすると `onDragDropEvent` は完全に発火しなくなり**、OS のファイルドロップが静かに動かなくなる。ネイティブのドロップハンドラが突然反応しなくなったら、まずこのフラグを確認すること。
+
+## 要点
+
+1. **Tauri WebView では、OS のファイルドロップに対してブラウザの `onDrop` は発火しない。** 代わりに `getCurrentWebviewWindow().onDragDropEvent(...)` を購読する。
+2. **ネイティブのペイロードはバイトではなくファイルシステムのパスを渡す。** `event.payload.paths` を拡張子で振り分け、Rust コマンド経由で読み取り／取り込みを行う。
+3. **ブラウザの `onDrop` フォールバックを残す** -- mock/REST 開発モードは本物のブラウザで動き、そこではブラウザイベントしか発火しない。
+4. **`dragDropEnabled` はウィンドウ設定で有効のままにする。** さもなければネイティブイベントは発火しない。

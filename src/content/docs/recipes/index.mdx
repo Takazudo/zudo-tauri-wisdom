@@ -34,6 +34,12 @@ Building multiple app variants (different names, identifiers, icons) from the sa
 
 **Best for:** shipping the same core functionality under different brands or for different use cases.
 
+### [Image Viewer App](./image-viewer-app)
+
+The image pipeline of a Tauri-based image viewer: HEIC decoding via `sips`/`heif-convert` fallback chain, efficient full-size delivery through the asset protocol, and a two-tier thumbnail cache (in-memory LRU + on-disk persistence). Covers the hard-won details that are easy to get subtly wrong.
+
+**Best for:** apps that display user-selected images and need fast thumbnails without round-tripping large files through IPC as base64.
+
 ## Common Themes
 
 Across these recipes, several patterns appear repeatedly:

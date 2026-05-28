@@ -24,6 +24,22 @@ Tauri はプラットフォームごとに異なるレンダリングエンジ�
 
 Tauri v2 はフロントエンドがアクセスできる内容を制御する Capabilities システムを使用する。[Capabilities](/frontend/capabilities/)ページでは、権限モデル、プラグインアクセス、セキュリティの考慮事項を扱う。
 
+### アセットプロトコルと CSP スコープ
+
+`convertFileSrc` はローカルファイルパスを WebView が直接読み込める `asset://` URL に変換する。その URL が実際に読み込まれるかどうかは、Content Security Policy と `tauri.conf.json` の `assetProtocol` スコープによって決まる。[アセットプロトコル](/frontend/asset-protocol/)ページでは、`csp: null` ショートカット、ハードニングされたビルド向けの許可リスト方式、セキュリティを強化したときに画像が表示されなくなる理由を解説する。
+
+### plugin-http による CORS 回避
+
+Tauri WebView 内でのブラウザ標準の `fetch` は通常のブラウザと同様に CORS の制約を受ける。[plugin-http CORS](/frontend/http-plugin-cors/)ページでは、`@tauri-apps/plugin-http` が Rust の `reqwest` クライアントを通じてリクエストをルーティングし、WebView の CORS 制約を完全に回避する方法を示す。
+
+### ディープリンクと useEffect のクリーンアップ競合
+
+カスタム URL スキームを使うと、OS がアプリを起動またはフォアグラウンドにして URL を届けられる。[ディープリンク](/frontend/deep-links/)ページでは、`tauri-plugin-deep-link` の登録方法、プラットフォームガード、そして React エフェクト内で URL ハンドラーがリークする非同期クリーンアップ競合を解説する。
+
+### ネイティブファイルのドラッグ＆ドロップ
+
+Tauri WebView では、OS からのファイルドロップに対してブラウザの `onDrop` が発火しない。ネイティブウィンドウレイヤーがドラッグを先にインターセプトするためである。[ドラッグ＆ドロップ](/frontend/drag-drop/)ページでは、その理由、正しい `onDragDropEvent` のサブスクリプション方法、モック/REST 開発モード向けの二重ハンドラーパターンを扱う。
+
 ## IPC モデル
 
 Tauri v2 はフロントエンドと Rust バックエンド間でメッセージパッシングアーキテクチャを使用する：

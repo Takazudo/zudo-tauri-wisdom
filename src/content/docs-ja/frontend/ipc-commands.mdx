@@ -378,7 +378,7 @@ if (!window.__TAURI__) {
 典型的なローディングページ（1 つのイベントをリスンし、1〜2 個のカスタムコマンドを invoke する）では、`capabilities/default.json` の `core:default` で十分である。`event:listen`、`event:unlisten`、そしてカスタム `#[tauri::command]` 関数が使う invoke の配線がすべて付与される。`core:allow-emit-to-any` のような広すぎる権限を先回りで付与してはいけない -- 必要ないし、webview が触れる面積を無用に広げるだけだ。
 
 ```json
-// capabilities/default.json -- デフォルトから変更なし
+// capabilities/default.json — unchanged from the default
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
@@ -395,12 +395,12 @@ if (!window.__TAURI__) {
 <script>
   const { event, core } = window.__TAURI__;
 
-  // バックエンドイベントをリスン
+  // Listen for a backend event
   const unlisten = await event.listen("launch-error", ({ payload }) => {
-    // payload は Rust が Emitter::emit で送ったもの
+    // payload is whatever Rust sent via Emitter::emit
   });
 
-  // カスタムコマンドを invoke
+  // Invoke a custom command
   await core.invoke("retry_launch");
 </script>
 ```
@@ -410,6 +410,64 @@ if (!window.__TAURI__) {
 `window.__TAURI__.core.invoke` は `@tauri-apps/api/core` が再エクスポートしている ESM 版の `invoke` と同じ関数である。ペイロードのシリアライズも戻り値のデシリアライズも同一 -- バンドル済みページは劣化した API を掴まされるわけではなく、import スタイルが違うだけだ。
 
 </Note>
+
+## フロントエンドからのプラグイン呼び出し: クリップボード
+
+すべてのフロントエンドからバックエンドへの呼び出しがカスタム `#[tauri::command]` というわけではない。Tauri 公式プラグインは、JS SDK から直接 `import` できる既製の関数を提供する。クリップボードへの書き込みはその典型例だ。「エクスポートをクリップボードにコピー」ボタンは、`@tauri-apps/plugin-clipboard-manager` の `writeText` を使う。
+
+```tsx
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+
+async function handleCopy(content: string) {
+  if (!content) return;
+  try {
+    await writeText(content);
+    // show a transient "Copied!" state
+  } catch {
+    console.error("Failed to copy to clipboard");
+  }
+}
+```
+
+### なぜ `navigator.clipboard` ではなくプラグインなのか
+
+ブラウザの `navigator.clipboard.writeText` は WebView 内にも存在するが、そこでは信頼できない。`navigator.clipboard` はセキュアコンテキスト要件とブラウザ式の権限プロンプトによってゲートされており、そのどちらも Tauri が動作する macOS・Windows・Linux の WebView 実装間で一貫した挙動を示さない。プラットフォームやウィンドウのフォーカスのされ方によっては、呼び出しが無言で reject されたりハングしたりする。
+
+プラグインは書き込みを WebView の JS クリップボードではなくネイティブの Rust クリップボード API 経由でルーティングする。これによりセキュアコンテキストと権限の癖を完全に回避するため、同じ呼び出しがすべてのプラットフォームで同じように動作する。
+
+### Capability とプラグイン init
+
+セットアップは 2 つ必要で、どちらか欠けるとコンパイル時ではなく実行時に失敗する。
+
+まず、ウィンドウの capability ファイルで `clipboard-manager:default` 権限を付与する:
+
+```json
+// capabilities/default.json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default", "clipboard-manager:default"]
+}
+```
+
+次に、`main.rs` でプラグインを登録する（`tauri-plugin-clipboard-manager` クレートと `@tauri-apps/plugin-clipboard-manager` npm パッケージの追加も必要）:
+
+```rust
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        // ... other plugins, .invoke_handler(...), etc.
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+<Warning>
+
+capability が欠けていると、`writeText` は実行時に権限エラーで reject される。プラグインが初期化されていないと、背後のコマンドが存在しないため呼び出しが失敗する。どちらもコンパイル時には現れない -- ボタンがクリックされたときに初めて失敗が表面化する。
+
+</Warning>
 
 ## 重要なポイント
 
