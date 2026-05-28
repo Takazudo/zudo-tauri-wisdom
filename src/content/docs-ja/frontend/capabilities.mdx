@@ -197,6 +197,96 @@ capabilities/
 
 これにより設定ウィンドウにはコア権限のみが付与され、ダイアログ、シェル、その他のプラグインへのアクセスは与えられない。
 
+## プラットフォームスコープの Capabilities
+
+Capability ファイルは `"platforms"` フィールドで特定のプラットフォームにスコープを限定できる。これにより、利用できるネイティブ API が異なるデスクトップとモバイルとで、単一のプロジェクトが異なる権限を付与できる。
+
+```json
+// capabilities/default.json — desktop
+{
+  "identifier": "default",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*/**"]
+  },
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "shell:default",
+    "haptics:default",
+    "notification:default"
+  ]
+}
+```
+
+```json
+// capabilities/ios.json — iOS
+{
+  "identifier": "ios",
+  "platforms": ["iOS"],
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}
+```
+
+```json
+// capabilities/android.json — Android
+{
+  "identifier": "android",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}
+```
+
+デスクトップ用ファイルは `shell:default`、`haptics:default`、`notification:default` に加えて開発サーバー用の `remote.urls` を付与する。`ios.json` は **意図的に `shell:default` を省略している**：iOS はサンドボックス内にプロセス起動や PTY の API を持たないため、ここでシェル権限を付与しても存在し得ない機能へのアクセスを与えることになる。
+
+### 多層防御：一致しなければならない 2 つのレイヤー
+
+iOS の Capability から `shell:default` を外すのは話の半分にすぎない。Rust 側もコンパイル時に同じことを行い、この 2 つのレイヤーは一致していなければならない。
+
+```rust
+// main.rs — the shell plugin is not even compiled on iOS
+let builder = tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_haptics::init())
+    .plugin(tauri_plugin_notification::init());
+
+// No PTY / process-spawning API exists in the iOS sandbox, so the
+// shell plugin is excluded from the build entirely on that target.
+#[cfg(not(target_os = "ios"))]
+let builder = builder.plugin(tauri_plugin_shell::init());
+```
+
+- **レイヤー 1（Capability）：** `ios.json` は `shell:default` を省略しているため、Tauri の権限システムが Capability レベルでシェル呼び出しをブロックする。
+- **レイヤー 2（Rust ビルド）：** `#[cfg(not(target_os = "ios"))]` がシェルプラグインを iOS バイナリから除外するため、仮に権限がすり抜けても呼び出す対象が存在しない。
+
+`shell` をどちらか一方のレイヤーだけに残すのは footgun である：プラグインの裏付けがない権限、あるいは権限によるゲートのないプラグインができてしまう。両レイヤーを一致させておくことで、どちらのチェックを忘れていても iOS 上のシェルコマンドは同じように失敗する。
+
+### `generate_handler!` 内での `#[cfg]`
+
+同じ `#[cfg(...)]` 属性は `tauri::generate_handler!` マクロの *内部* でも機能し、コマンドをプラットフォームごとに個別に除外できる。これは非自明だが正当である：マクロは各エントリに対して属性を展開するため、除外されたコマンドは動作し得ないターゲットでは決して登録されない。
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    commands::files::messages_list,
+    commands::settings::settings_get,
+    // ...other cross-platform commands...
+
+    // Build-pipeline commands spawn subprocesses, so they are not
+    // compiled on iOS — the attribute drops them from the handler list.
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_build_and_install,
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_cancel_build,
+    #[cfg(not(target_os = "ios"))]
+    commands::builder::generator_check_toolchain,
+])
+```
+
+iOS ではこれらのコマンドはハンドラーにまったく存在しないため、フロントエンドから呼び出すと、そのプラットフォームに存在すべきでないシェルベースのコードが実行されるのではなく、「command not found」エラーで失敗する。
+
 ## トラブルシューティング
 
 ### 「IPC call failed」または「Permission denied」
