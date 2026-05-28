@@ -193,6 +193,66 @@ iOS を有効にした Tauri プロジェクトでは既存の `.gitignore` を�
 
 フロントエンドが実際に使う Web API をサポートする最低バージョンを選ぶ。詳細は [caniuse.com](https://caniuse.com) を Safari-iOS でフィルタして確認すると良い。
 
+## iOS サンドボックスのパス解決
+
+iOS ではアプリは好きな場所に書き込めない。すべてはアプリのサンドボックスコンテナの内側に置く必要がある。Rust から確実に到達できる唯一の書き込み可能な場所はコンテナの Documents ディレクトリで、iOS では `dirs::document_dir()` がそこを指す。アプリの作業ファイルはすべてここに振り向ける:
+
+```rust
+let workspace = dirs::document_dir()
+    .expect("could not determine iOS documents directory")
+    .join("my-app");
+std::fs::create_dir_all(&workspace).ok();
+```
+
+得られるパスはサンドボックスの_内側_にある。サンドボックスの外側（リポジトリのパスや、デスクトップ向けに計算した `~/Documents` のパスなど）にアンカーしようとすると、実機では書き込めず、しかも無言で失敗する。
+
+### cfg の順序の罠
+
+ひとつのバイナリでデスクトップと iOS の両方を扱う場合、通常はプラットフォームと、デバッグ／リリースの両方で分岐する。その分岐の順序が重要で、間違えると半日を溶かす。
+
+```rust
+fn resolve_project_root() -> String {
+    // iOS (debug OR release): always use the app sandbox documents directory.
+    // Must be checked BEFORE the debug_assertions branch. On a simulator build
+    // both `cfg!(target_os = "ios")` and `cfg!(debug_assertions)` are true, and
+    // the repo-root path from CARGO_MANIFEST_DIR is outside the iOS container.
+    #[cfg(target_os = "ios")]
+    {
+        let workspace = dirs::document_dir()
+            .expect("could not determine iOS documents directory")
+            .join("my-app");
+        std::fs::create_dir_all(&workspace).ok();
+        return workspace.to_string_lossy().to_string();
+    }
+
+    // Dev mode (non-iOS): the repo root is the parent of src-tauri/
+    if cfg!(debug_assertions) {
+        return std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+    }
+
+    // Production (macOS and other non-iOS targets)
+    #[cfg(not(target_os = "ios"))]
+    {
+        let home = dirs::home_dir().expect("could not determine home directory");
+        home.join("Documents/my-app").to_string_lossy().to_string()
+    }
+}
+```
+
+肝心な点: **iOS シミュレータ**では、デバッグビルドにおいて `cfg!(target_os = "ios")` と `cfg!(debug_assertions)` の**両方**が `true` に評価される。`debug_assertions` を先にチェックすると、シミュレータは dev 分岐に入り、`CARGO_MANIFEST_DIR` からリポジトリルート — iOS アプリコンテナの_外側_のパス — を返してしまう。するとアプリはファイルの読み書きに失敗するが、原因を指し示すエラーは出ない。シミュレータは Mac のファイルシステムを読めてしまうため、中途半端に動いているように見えることすらあり、これが追跡をいっそう厄介にする。
+
+修正は純粋に順序の問題である。早期 `return` を持つ `#[cfg(target_os = "ios")]` ブロックが、`debug_assertions` のチェックよりも**先**に来なければならない。同じパターンは `resolve_app_config_dir()` をはじめ、デバッグモードで分岐するあらゆるパスリゾルバに当てはまる — iOS の早期 return を先頭に置くこと。
+
+<Warning>
+
+これは型システムやコンパイラが捕まえてくれるものではない。両方の分岐がコンパイルされ、シミュレータでは両方が到達可能で、誤っているのは実行時のパスだけである。サンドボックスのパス解決は必ず実機でテストするか、少なくとも解決されたパスがリポジトリではなくアプリコンテナの下にあることを確認すること。
+
+</Warning>
+
 ## 公式ドキュメント
 
 - [Tauri Project Structure](https://v2.tauri.app/start/project-structure/)
