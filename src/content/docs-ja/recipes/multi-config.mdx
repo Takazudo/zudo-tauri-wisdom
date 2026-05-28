@@ -220,3 +220,159 @@ const appVariant = import.meta.env.VITE_APP_VARIANT || 'zudotext';
 - **同じ Rust バイナリ** -- すべてのバリアントは同じ Rust バイナリにコンパイルされる。設定だけではバリアント固有の Rust コードを持つことはできない（それにはフィーチャーフラグを使用する）
 - **同じバンドルリソース** -- `bundle.icon` や `frontendDist` をオーバーライドしない限り、すべてのバリアントは同じリソースを共有する
 - **同じ Cargo.toml** -- `Cargo.toml` のクレート名は変更されず、変わるのは Tauri のプロダクト名のみである
+
+## 実行時の落とし穴
+
+上記の `current_exe()` によるアプリ名の導出は、インストール済みの `.app` バンドルでは問題なく動作するが、これを破綻させる実行時の状況が2つある。どちらも明示的に処理しなければ、あるバリアントが別のバリアントの状態を静かに破壊してしまう。
+
+### 開発モードの落とし穴：`.app` 祖先が存在しない
+
+開発ビルドは `.app` バンドルからではなく `target/debug/` から実行される。`current_exe()` のパスには **`.app` の祖先が存在しない**ため、導出は何も見つけられずフォールバックに流れる。そのフォールバックがたまたまインストール済みアプリの名前に解決されると、開発時の実行が**インストール済みアプリの**ワークスペースレジストリを読み書きしてしまう -- 開発セッションが静かに本番の状態を変更することになる。
+
+修正方法は、`cfg!(debug_assertions)` でショートサーキットし、導出のフォールバックに頼らず `"default"` をハードコードすることである。
+
+```rust
+pub fn resolve_app_config_dir() -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("could not determine home directory");
+    let app_name = if cfg!(debug_assertions) {
+        // Dev mode: do not reuse the binary's .app ancestor because there
+        // often isn't one (dev builds run from target/debug/). Anchor the
+        // registry under "default/" so dev work does not touch any
+        // installed app's registry.
+        "default".to_string()
+    } else {
+        resolve_app_name()
+    };
+    let dir = home.join(".config/zudotext").join(&app_name);
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+```
+
+<Warning>
+
+`cfg!(debug_assertions)` の分岐がなければ、開発セッションとインストール済みアプリのレジストリとの間に立ちはだかるのは、フォールバックが何に解決されるか次第ということになる。開発時を `"default/"` 配下にアンカーすることで、分離が偶然ではなく明示的なものになる。
+
+</Warning>
+
+### マネージャモードのゲーティング
+
+同じバイナリが**マネージャ**（アプリごとのバリアントを一覧表示して開くランチャーアプリ）としても出荷される場合、マネージャビルドは通常のバリアントと同じ起動コードを実行する -- だがマネージャ自身のワークスペースは存在しない。完全な起動シーケンスを実行すると、起動するだけで `default` ワークスペースレジストリに書き込み、ファイルウォッチャーを起動し、ポート 3001 で REST アダプタをバインドしてしまう。さらに悪いことに、そのポートバインドは同じくポート 3001 を使おうとする**並行する開発セッションと競合する**。
+
+マネージャモードはビルド時に埋め込まれた `productName`（実行時には `package_info().name` として表面化する）から検出し、書き込みアプリ側の副作用をスキップする。
+
+```rust
+pub const MANAGER_PRODUCT_NAME: &str = "zudotext";
+
+pub fn is_manager_mode<R: tauri::Runtime, M: Manager<R>>(handle: &M) -> bool {
+    handle.package_info().name == MANAGER_PRODUCT_NAME
+}
+```
+
+```rust
+let manager_mode = app_mode::is_manager_mode(app.handle());
+
+// Workspace-registry write — skipped in manager mode so the manager
+// does not clobber the default text-app workspace.
+if !manager_mode {
+    register_workspace(&app_config_dir);
+}
+
+// REST adapter (axum on port 3001) — dev only, and never in the
+// manager, where binding 3001 would race a real text-app dev session.
+if cfg!(debug_assertions) && !manager_mode {
+    tauri::async_runtime::spawn(async move {
+        http_server::start(http_state, http_handle, 3001).await;
+    });
+}
+
+// File watchers — the manager has no workspace to watch.
+if !manager_mode {
+    commands::watchers::start_messages_watcher(&state_arc, app.handle());
+}
+```
+
+この定数は実行時にフリップできないよう、フィーチャーフラグから読み込むのではなくハードコードされている。ベースの `tauri.conf.json` はマネージャをビルドし（`productName: "zudotext"`）、バリアントごとの `--config` オーバーライドは `productName` を別の値に変更するため、定数と一致しないものはすべて書き込みアプリとして扱われる。
+
+## 1つのフロントエンドから2つの Tauri クレート
+
+`--config` オーバーレイは、名前、アイコン、識別子といった表面的なメタデータのみが異なるバリアントをカバーする。しかし、1つのフロントエンドから**根本的に異なる2つの起動モード**を出荷するアプリもあり、オーバーレイではそれを表現できない。この場合の正しい構造は、オーバーレイを持つ1つのクレートではなく、2つのクレートディレクトリである。
+
+動機となるケースは、**オフラインリーダー**（事前ビルドされたサイトをバンドルし、開発サーバーなし）と**設定可能な開発ラッパー**（ローカルのローディングページを通じてライブの開発サーバーを読み込む）の両方を1つのフロントエンドから出荷するアプリである。これらは同じランタイムの2つの見た目ではない -- `frontendDist` と開発サーバーの動作が中核で異なる。
+
+### クレート1：`src-tauri` -- オフラインリーダー
+
+事前ビルドされた `dist/` を自己完結型アプリにバンドルする。バイナリ以外のバンドル出力はなく、ライブのフロントエンドもない。
+
+```json
+{
+  "productName": "ZudoDoc",
+  "version": "0.1.0",
+  "identifier": "com.zudolab.zudo-doc",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [],
+    "category": "DeveloperTool",
+    "macOS": { "minimumSystemVersion": "10.15" }
+  }
+}
+```
+
+リーダーは `frontendDist` を `../dist`（ビルド済みのサイト）に向け、`bundle.active: false` を設定する -- これは配布用インストーラではなく、静的アセットを包む実行時ラッパーである。
+
+### クレート2：`src-tauri-dev` -- 設定可能な開発ラッパー
+
+フロントエンドが開発サーバーを起動するローカルのローディングページである、出荷可能なアプリ。親ディレクトリから `pnpm dev` を実行し、グローバルな Tauri API をローディングページに公開する。
+
+```json
+{
+  "productName": "zudo-doc dev",
+  "version": "0.1.0",
+  "identifier": "com.takazudo.zudo-doc-dev",
+  "build": {
+    "frontendDist": "./frontend",
+    "beforeDevCommand": "cd .. && pnpm dev",
+    "devUrl": "http://localhost:4321/"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": true,
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "macOS": { "minimumSystemVersion": "10.15" }
+  }
+}
+```
+
+リーダーとの違いは見た目ではなく構造的なものである。
+
+| フィールド | リーダー（`src-tauri`） | 開発ラッパー（`src-tauri-dev`） |
+|-------|----------------------|-------------------------------|
+| `frontendDist` | `../dist`（ビルド済みサイト） | `./frontend`（ローカルのローディングページ） |
+| `beforeDevCommand` | なし | `cd .. && pnpm dev` |
+| `bundle.active` | `false` | `true` |
+| `bundle.icon` | `[]` | `["icons/icon.png"]` |
+| `withGlobalTauri` | 未設定 | `true` |
+
+### 2つ目のクレートがオーバーレイに勝るとき
+
+`--config` オーバーレイではなく2つ目のクレートディレクトリを選ぶのは、名前、アイコン、識別子だけでなく、**`frontendDist` や開発サーバーの動作そのものが異なる**ときである。
+
+<Tip>
+
+判断基準はシンプルである。バリアントが `productName`、`identifier`、`bundle.icon` だけで異なるなら、`--config` オーバーレイを使う -- DRY を保ち、1つのクレートを共有できる。フロントエンドの読み込み方（静的バンドルかライブの開発サーバーか）や、開発コマンドを実行するかどうかが変わるなら、2つ目のクレートディレクトリにフォークする。異なる起動モードをオーバーレイで表現しようとすると、複数の設定間で `frontendDist` と `beforeDevCommand` を切り替え続けることになり、2つの明示的なクレートディレクトリよりも理解しづらくなる。
+
+</Tip>
