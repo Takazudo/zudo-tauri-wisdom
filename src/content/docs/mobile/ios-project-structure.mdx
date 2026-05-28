@@ -195,7 +195,7 @@ Pick the lowest version that supports the Web APIs your frontend actually uses. 
 
 ## iOS Sandbox Path Resolution
 
-On iOS, your app cannot write wherever it likes. Everything must live inside the app's sandbox container. The one writable location you can reliably reach from Rust is the container's Documents directory, which `dirs::document_dir()` resolves to on iOS. Route all of your app's working files there:
+On iOS, your app cannot write wherever it likes. Everything must live inside the app's sandbox container. The standard writable home for your app's working files is the container's Documents directory, which `dirs::document_dir()` resolves to on iOS (the sandbox also exposes `Library/` and `tmp/`, but Documents is the right place for working files). Route all of your app's working files there:
 
 ```rust
 let workspace = dirs::document_dir()

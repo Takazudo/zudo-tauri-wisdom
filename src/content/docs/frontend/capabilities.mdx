@@ -242,6 +242,8 @@ A capability file can scope itself to specific platforms with a `"platforms"` fi
 
 The desktop file grants `shell:default`, `haptics:default`, and `notification:default` plus `remote.urls` for the dev server. The `ios.json` file **deliberately omits `shell:default`**: iOS has no process-spawning or PTY API inside its sandbox, so a shell permission there would grant access to a capability that cannot exist.
 
+`haptics:default` and `notification:default` appear in the desktop file too because those plugins are registered on every platform. On desktop the haptic calls are simply silent no-ops -- there is no haptic hardware -- but the permission must still be granted, or the IPC call would be rejected at the capability layer.
+
 ### Defense in depth: two layers that must agree
 
 Dropping `shell:default` from the iOS capability is only half of the story. The Rust side does the same thing at compile time, and the two layers must agree.
