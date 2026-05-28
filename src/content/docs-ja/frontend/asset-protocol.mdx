@@ -1,0 +1,80 @@
+---
+title: Asset プロトコルと CSP スコープ
+description: convertFileSrc の背後にある WebView 設定 -- csp null のショートカット、assetProtocol スコープの許可リスト、そしてハードニング済みビルドで画像が真っ白になる理由。
+sidebar_position: 10
+---
+
+## このページの内容
+
+`convertFileSrc` はローカルのファイルパスを、WebView が直接読み込める `asset://` URL に変換する（サムネイル、画像プレビューなど、base64 として IPC で往復させたくないものに使う）。
+
+その URL が実際に読み込めるかどうかは、完全に **WebView 設定** によって決まる -- 具体的には `tauri.conf.json` 内の Content Security Policy と asset プロトコルのスコープである。このページはその設定レイヤーについて扱う。（Rust 側の `convertFileSrc` の使い方と path/base64 の使い分けは別ページで扱う。）
+
+## `csp: null` というショートカット
+
+多くの小規模／社内向けアプリは、CSP を完全に無効化するショートカットを取る。CSP がなければ、`asset://` URL は **許可リストなし** で読み込まれる -- `assetProtocol` ブロックは一切不要である：
+
+```json
+{
+  "app": {
+    "security": {
+      "csp": null
+    }
+  }
+}
+```
+
+これが、実在する画像ビューアアプリのセキュリティブロックの全体である：`csp: null`、`assetProtocol` スコープなし。`convertFileSrc` が URL を返し、WebView はディスク上のどこからでもそれを読み込む。
+
+<Warning>
+
+`"csp": null` は Content Security Policy を完全に無効化する。WebView はあらゆるオリジン、ディスク上のあらゆるパスからスクリプト、スタイル、ファイルを読み込める。自分で管理するローカル開発ツールには問題ないが、ハードニングして配布するアプリには許容できない。
+
+</Warning>
+
+## ハードニング済みビルド：スコープ + 厳格な CSP
+
+配布用ビルドでは CSP を再び有効にする。有効にした瞬間、asset プロトコルは暗黙的に開かれた状態ではなくなる -- **プロトコルを有効化してスコープを宣言** し、かつ **CSP で `asset:` を許可** しなければならない。
+
+プロトコルを有効化し、どのパスを提供できるかをスコープで指定する：
+
+```json
+{
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/images/**", "$HOME/Pictures/**"]
+      }
+    }
+  }
+}
+```
+
+ここでは 2 つの要素が機能している：
+
+- **`assetProtocol.scope`** はグロブパターンの配列である（fs プラグインと同じパスグロブの仕組みである `FsScope` を使う）。パターンに一致するファイルのみ提供できる。`$APPDATA`、`$HOME`、`$RESOURCE` などの Tauri のパス変数は展開される。
+- **`img-src ... asset: http://asset.localhost`** は、WebView が URL をレンダリングできるようにする CSP トークンである。`asset:` は macOS/Linux 用、`http://asset.localhost` は同じプロトコルの Windows 形式である。どちらかを省くと、スコープがファイルを許可していても CSP によって画像がブロックされる。
+
+## 罠：開発では動くのにロックダウンしたビルドで真っ白
+
+これは典型的な失敗パターンである。開発中は `csp: null` で動かしていたため、`convertFileSrc` の画像は問題なく読み込めた。その後、本物の CSP を含むハードニング済み設定で出荷すると -- すべての asset 画像が真っ白にレンダリングされ、**エラーダイアログも例外も発生しない**。唯一の手がかりは WebView の devtools コンソールに出る CSP 違反だけである。
+
+原因は次の 2 つのうちどちらかである：
+
+1. **`img-src` に `asset:` / `http://asset.localhost` がない** -- ファイルが読み込まれる前に CSP が URL をブロックする。
+2. **ファイルが `assetProtocol.scope` の中にない** -- プロトコルがそのファイルの提供を拒否する。
+
+<Note>
+
+`<img>` がブロックされても例外をスローせず、要素が何も表示しないだけなので、この失敗はサイレントである。CSP を厳格化した瞬間に asset 画像が「消えた」場合は、まず devtools コンソールで CSP の `img-src` 違反を確認し、次にファイルパスが `scope` のグロブに一致しているかを検証する。
+
+</Note>
+
+## 重要なポイント
+
+1. **`csp: null` は許可リストなしで asset プロトコルを開く** -- 実際によく使われるショートカットだが、ローカルツールにのみ許容される。
+2. **本物の CSP には `assetProtocol.enable: true` と`scope` が必要** -- CSP が有効になるとプロトコルはデフォルトでオフになる。
+3. **`img-src` には `asset:` と `http://asset.localhost` を列挙する** -- WebView が URL をレンダリングできるようにするクロスプラットフォームのトークン。
+4. **開発から本番への罠はサイレント** -- `csp: null` で動いていた画像が厳格な CSP 下でエラーなく真っ白になる。devtools コンソールを確認すること。
