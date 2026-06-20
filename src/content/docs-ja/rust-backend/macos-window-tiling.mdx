@@ -23,7 +23,6 @@ macOS は `[NSApp setWindowsMenu:]` で「ウィンドウメニュー」とし�
 2つの問題があった：
 
 1. **muda のバグ（v0.17.1）**: `set_as_windows_menu_for_nsapp()` メソッドが、実際に表示されている `NSMenu` ではなく、内部テンプレートの `NSMenu` を `[NSApp setWindowsMenu:]` に渡していた。呼び出しても、間違ったメニューが登録されていた。[muda v0.17.2](https://github.com/tauri-apps/muda/pull/335) で修正された。
-
 2. **呼び出しの欠落**: アプリコードが Window サブメニューに対して `set_as_windows_menu_for_nsapp()` を呼び出していなかったため、macOS はどのメニューが Window メニューなのか認識できなかった。
 
 ### Electron が動作する理由

@@ -1,16 +1,25 @@
 # zudo-tauri-wisdom
 
-Takazudo's Tauri v2 dev notes, built with zudo-doc (Astro, MDX, Tailwind CSS v4).
+Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, Tailwind CSS v4).
 
 ## Commands
 
 ```bash
-pnpm dev          # Start Astro dev server (port 4819)
-pnpm build        # Build static site to dist/
-pnpm preview      # Preview built site
-pnpm check        # Astro type checking
-pnpm format:md    # Format MDX files
-pnpm b4push       # Pre-push validation (format + typecheck + build)
+pnpm dev              # Start zfb dev server (port 4321)
+pnpm build            # Build static site via zfb build
+pnpm preview          # Preview built site
+pnpm check            # zfb type checking
+pnpm check:html       # Validate built HTML (html-validate dist/**/*.html)
+pnpm check:links      # Check for broken links in dist/
+pnpm check:pin-parity # Verify pin version parity across packages
+pnpm check:wrangler-pin # Verify wrangler version is pinned correctly
+pnpm check:template-drift # Check for template drift vs upstream
+pnpm format:md        # Format MDX files (write)
+pnpm format:md:check  # Format MDX files (check only)
+pnpm b4push           # Pre-push validation (format + typecheck + build)
+pnpm gen:z-index      # Generate z-index tokens
+pnpm check:z-index    # Check z-index tokens are up to date
+pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 ```
 
 ## Content Structure
@@ -33,6 +42,7 @@ Top-level directories under `src/content/docs/`. Directories with header nav ent
 - `frontend/` - IPC commands, useEffect pitfalls, capabilities
 - `dev-server/` - SSE live-reload, watcher loops, Vite integration
 - `deployment/` - Build bundle, macOS pitfalls, cargo cache, node download
+- `mobile/` - Mobile (iOS/Android) Tauri setup and patterns
 - `recipes/` - Real-world app patterns (doc viewer, text editor, multi-config)
 - `claude/` - Claude Code integration docs
 
@@ -47,7 +57,7 @@ All documentation files use `.mdx` format with YAML frontmatter.
 
 ### Frontmatter Fields
 
-Schema defined in `src/content.config.ts`:
+Schema defined in `zfb.config.ts` (collections) and `src/config/docs-schema.ts` (field definitions). There is NO `src/content.config.ts` -- collections live in `zfb.config.ts`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -66,6 +76,9 @@ Schema defined in `src/content.config.ts`:
 | `search_exclude` | boolean | No | Exclude from search results |
 | `pagination_next` | string/null | No | Override next page link (null to hide) |
 | `pagination_prev` | string/null | No | Override prev page link (null to hide) |
+| `doc_history` | boolean | No | Override per-page whether doc-history is shown |
+| `category_no_page` | boolean | No | Makes index.mdx a non-linked sidebar header (no route/sitemap/search); frontmatter form of `noPage: true` in `_category_.json` |
+| `category_sort_order` | "asc"/"desc" | No | Child sort direction for this category; frontmatter form of `_category_.json` sort order |
 
 ### Content Rules
 
@@ -103,7 +116,28 @@ Content here.
 <Note>Short note content.</Note>
 ```
 
-Types: `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>`
+Types: `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>`, `<Caution>`
+
+Additional directive types:
+
+```markdown
+:::details[Summary text]
+Collapsible content here.
+:::
+
+:::code-group
+```bash [npm]
+npm install
+```
+```bash [pnpm]
+pnpm install
+```
+:::
+
+:::caution
+Caution content here.
+:::
+```
 
 ### Mermaid Diagrams
 
@@ -154,7 +188,7 @@ Use `_category_.json` for category-level metadata when needed:
 }
 ```
 
-The `noPage: true` flag means the category has no landing page (just groups items).
+The `noPage: true` flag means the category has no landing page (just groups items). Alternatively, use `category_no_page: true` in the `index.mdx` frontmatter -- frontmatter wins over the sidecar JSON.
 
 ### Header Navigation
 
@@ -190,7 +224,7 @@ Defined in `src/config/settings.ts` via `headerNav`. Each item maps to a top-lev
 
 Available globally in MDX without imports:
 
-- `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>` - Admonitions
+- `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>`, `<Caution>` - Admonitions
 - `<HtmlPreview>` - Interactive HTML/CSS/JS preview with code display
 
 ## Typography
@@ -201,15 +235,31 @@ Available globally in MDX without imports:
 
 ## Doc Skill (tauri-wisdom)
 
-The `tauri-wisdom` skill (`/.claude/skills/tauri-wisdom/SKILL.md`) is **generated** by `pnpm setup:doc-skill` (runs `scripts/setup-doc-skill.sh`). It is gitignored -- do NOT track it in git or edit it directly. To update the skill content, edit the generator script and re-run `pnpm setup:doc-skill`.
+The `tauri-wisdom` skill (`.claude/skills/tauri-wisdom/SKILL.md`) is **generated** by `pnpm setup:doc-skill` (runs `scripts/setup-doc-skill.sh`). It is gitignored -- do NOT track it in git or edit it directly. To update the skill content, edit the generator script and re-run `pnpm setup:doc-skill`.
+
+## Project Layout
+
+```
+pages/          # Host-app routing layer (zfb entry points)
+src/
+  components/   # Shared UI components
+  config/       # settings.ts — site-wide config; docs-schema.ts — frontmatter schema
+  content/      # MDX doc pages (docs/ + docs-ja/)
+  utils/        # Shared utilities
+plugins/        # zfb integration plugins (.mjs)
+zfb.config.ts   # Build config (framework, collections, plugins, adapter)
+```
 
 ## Site Config
 
-- Base path: `/pj/zudo-tauri`
+- Base path: `/` (root — no subpath prefix)
+- Live URL: `https://zudo-tauri-wisdom.takazudomodular.com/`
 - Settings: `src/config/settings.ts`
+- Build config: `zfb.config.ts`
 
 ## CI/CD
 
-- PR checks: typecheck + build + Cloudflare Pages preview
-- Main deploy: build + Cloudflare Pages production + IFTTT notification
-- Secrets: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, IFTTT_PROD_NOTIFY
+- PR checks: typecheck + build + Cloudflare Workers static assets preview
+- Main deploy: build -> `wrangler deploy` -> Cloudflare Workers + IFTTT notification
+- Hosting: **Cloudflare Workers static assets** (not Pages)
+- Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `IFTTT_PROD_NOTIFY`
