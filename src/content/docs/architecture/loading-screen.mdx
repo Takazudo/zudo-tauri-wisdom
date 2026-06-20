@@ -242,9 +242,9 @@ Different apps have different startup needs. This table helps you pick the right
 | Scenario                                                       | Recommended pattern                                                          | Where documented                                                                                      |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | App wraps a dev server / sidecar with 5-30s startup            | Bundled loading HTML via `WebviewUrl::default()` + background polling        | This page                                                                                             |
-| SPA that just needs to avoid white flash on launch             | Hidden window + `show()` on `PageLoadEvent::Finished`                        | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
-| App has blocking init (DB migrations, auth, first-run setup)   | Separate splash window (frameless, transparent)                              | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
-| Dev mode inline loading page                                   | `data:` URL (requires `webview-data-url` cargo feature)                      | [Window Creation and Lifecycle](/pj/zudo-tauri/docs/rust-backend/window-management/)                   |
+| SPA that just needs to avoid white flash on launch             | Hidden window + `show()` on `PageLoadEvent::Finished`                        | [Window Creation and Lifecycle](../rust-backend/window-management.mdx)                   |
+| App has blocking init (DB migrations, auth, first-run setup)   | Separate splash window (frameless, transparent)                              | [Window Creation and Lifecycle](../rust-backend/window-management.mdx)                   |
+| Dev mode inline loading page                                   | `data:` URL (requires `webview-data-url` cargo feature)                      | [Window Creation and Lifecycle](../rust-backend/window-management.mdx)                   |
 
 <Tip>
 
