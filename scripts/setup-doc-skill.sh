@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # Read project name from package.json (used in the generated SKILL.md description/title text)
 PROJECT_NAME=$(node -e "console.log(require('$ROOT_DIR/package.json').name || 'my-project')")
 # Skill name is pinned (not "${PROJECT_NAME}-wisdom") so it stays in lockstep with the .gitignore
-# entry and CLAUDE.md, which both reference `test-wisdom`. See issue #78.
+# entry and CLAUDE.md, which both reference `tauri-wisdom`. See issue #78.
 DEFAULT_SKILL_NAME="tauri-wisdom"
 
 # Prompt for skill name
