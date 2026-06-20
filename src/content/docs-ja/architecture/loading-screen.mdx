@@ -242,9 +242,9 @@ sequenceDiagram
 | シナリオ                                                       | 推奨パターン                                                          | ドキュメント                                                                                      |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | 開発サーバー / sidecar のラップで 5〜30 秒の起動遅延がある      | `WebviewUrl::default()` によるバンドル済みローディング HTML + バックグラウンドポーリング        | このページ                                                                                             |
-| 起動時の白フラッシュを回避したい SPA                            | 非表示ウィンドウ + `PageLoadEvent::Finished` で `show()`                      | [ウィンドウの作成とライフサイクル](/pj/zudo-tauri/ja/docs/rust-backend/window-management/)                   |
-| ブロッキング初期化がある（DB マイグレーション、認証、初回セットアップ）   | 別のスプラッシュウィンドウ（フレームなし、透明）                              | [ウィンドウの作成とライフサイクル](/pj/zudo-tauri/ja/docs/rust-backend/window-management/)                   |
-| 開発モードのインラインローディングページ                        | `data:` URL（`webview-data-url` cargo feature が必要）                      | [ウィンドウの作成とライフサイクル](/pj/zudo-tauri/ja/docs/rust-backend/window-management/)                   |
+| 起動時の白フラッシュを回避したい SPA                            | 非表示ウィンドウ + `PageLoadEvent::Finished` で `show()`                      | [ウィンドウの作成とライフサイクル](../rust-backend/window-management.mdx)                   |
+| ブロッキング初期化がある（DB マイグレーション、認証、初回セットアップ）   | 別のスプラッシュウィンドウ（フレームなし、透明）                              | [ウィンドウの作成とライフサイクル](../rust-backend/window-management.mdx)                   |
+| 開発モードのインラインローディングページ                        | `data:` URL（`webview-data-url` cargo feature が必要）                      | [ウィンドウの作成とライフサイクル](../rust-backend/window-management.mdx)                   |
 
 <Tip>
 
