@@ -225,9 +225,6 @@ Some features are inherently native and cannot work over HTTP. The REST adapter 
 ## Key Design Decisions
 
 1. **Promise-based commands, callback-based events** -- Commands are one-shot request/response pairs. Events are long-lived subscriptions. The interface reflects this difference.
-
 2. **Event listeners return cleanup functions** -- Following React's `useEffect` cleanup pattern, every `on*` method returns an unsubscribe function. This prevents memory leaks when components unmount.
-
 3. **Adapter is set once at startup** -- No runtime switching. The Vite config determines which adapter the build uses, keeping the runtime code simple.
-
 4. **Mock adapter has full fidelity** -- It implements collision handling, frontmatter parsing, and sort ordering to match the real backend. This catches integration bugs early.

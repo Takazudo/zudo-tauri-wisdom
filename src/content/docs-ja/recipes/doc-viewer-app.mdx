@@ -425,9 +425,7 @@ try {
 間違えやすい勘所が 3 つある:
 
 1. **Finder / launchd の PATH は最小限。** Finder から起動された `.app` の内部では、`PATH` は典型的に `/usr/bin:/bin:/usr/sbin:/sbin` だけだ。ユーザーのシェル `PATH` に乗っている `pnpm` には届かない。絶対パスを先に探り、`/usr/bin/which pnpm` にフォールバックし、どちらも駄目なら明確なメッセージで終了する。[Rust 側の `find_pnpm()` 戦略](#pnpm-の検索)と同じ考え方だ。
-
 2. **インストール中もローディングページは有効のまま。** `pnpm install` が走っている間、sidecar の `/___ready` は 503 を返し続ける。Rust の準備完了ポーラーも sidecar 側の `LOADING_HTML` の自動リフレッシュも「まだビルド中」のスピナーを表示したまま -- インストール中の UX 劣化は起きない。インストールのログは `stdio: "inherit"` を通って sidecar ログに流れるので、エラー状態のローディングページが表示するファイルに残る。
-
 3. **pnpm 不在時の明確な停止。** `findPnpm()` が `null` を返したら、「pnpm not found」のメッセージを stderr に出して `process.exit(1)` する。そうすれば [`wait_for_ready` の sidecar 死亡検出器](../architecture/process-lifecycle.mdx#準備完了ループでの-sidecar-の死亡検出)が約 1 秒で `launch-error` 経由でユーザーに失敗を通知できる。無言でハングさせると UI はスピナーのまま固まる。
 
 <Tip>

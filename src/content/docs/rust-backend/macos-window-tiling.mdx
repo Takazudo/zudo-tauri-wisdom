@@ -23,7 +23,6 @@ macOS injects tiling menu items into whichever `NSMenu` is registered as the "Wi
 Two things were wrong:
 
 1. **muda bug (v0.17.1)**: The `set_as_windows_menu_for_nsapp()` method passed an internal template `NSMenu` to `[NSApp setWindowsMenu:]` instead of the actual displayed `NSMenu`. Even if you called it, it registered the wrong menu. This was fixed in [muda v0.17.2](https://github.com/tauri-apps/muda/pull/335).
-
 2. **Missing call**: The app code never called `set_as_windows_menu_for_nsapp()` on the Window submenu, so macOS never knew which menu was the Window menu.
 
 ### Why Electron works
