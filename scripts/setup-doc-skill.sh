@@ -7,6 +7,15 @@ set -euo pipefail
 # the user-scope skills directory (~/.claude/skills/).
 # ────────────────────────────────────────────────────────
 
+SILENT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --silent|-y) SILENT="true" ;;
+    *) echo "Error: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+  shift
+done
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Read project name from package.json (used in the generated SKILL.md description/title text)
@@ -15,12 +24,16 @@ PROJECT_NAME=$(node -e "console.log(require('$ROOT_DIR/package.json').name || 'm
 # entry and CLAUDE.md, which both reference `tauri-wisdom`. See issue #78.
 DEFAULT_SKILL_NAME="tauri-wisdom"
 
-# Prompt for skill name
+# Prompt for skill name (skipped under --silent: use the pinned default non-interactively)
 echo ""
 echo "=== zudo-doc Skill Setup ==="
 echo ""
-read -rp "Skill name [$DEFAULT_SKILL_NAME]: " SKILL_NAME
-SKILL_NAME="${SKILL_NAME:-$DEFAULT_SKILL_NAME}"
+if [ -n "$SILENT" ]; then
+  SKILL_NAME="$DEFAULT_SKILL_NAME"
+else
+  read -rp "Skill name [$DEFAULT_SKILL_NAME]: " SKILL_NAME
+  SKILL_NAME="${SKILL_NAME:-$DEFAULT_SKILL_NAME}"
+fi
 
 # Validate skill name (allow only alphanumeric, hyphens, underscores)
 if [[ ! "$SKILL_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
