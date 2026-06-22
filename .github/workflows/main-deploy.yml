@@ -75,6 +75,9 @@ jobs:
           path: dist/
           retention-days: 1
           if-no-files-found: error
+          # github.run_id is stable across re-runs; upload-artifact@v4 errors on a
+          # duplicate artifact name unless overwrite is set, so a re-run would fail.
+          overwrite: true
 
   # ---------------------------------------------------------------------------
   # Job: HTML validate
@@ -155,6 +158,9 @@ jobs:
           path: doc-history-out/
           retention-days: 1
           if-no-files-found: error
+          # github.run_id is stable across re-runs; upload-artifact@v4 errors on a
+          # duplicate artifact name unless overwrite is set, so a re-run would fail.
+          overwrite: true
 
   # ---------------------------------------------------------------------------
   # Job 3: Deploy to Cloudflare Workers (production)
