@@ -12,6 +12,8 @@ export type {
   TagPlacement,
   TagGovernanceMode,
   TagVocabularyEntry,
+  ChangelogConfig,
+  SiteHeadConfig,
   MetaTagsConfig,
 } from "./settings-types";
 import type {
@@ -26,6 +28,8 @@ import type {
   BodyFootUtilAreaConfig,
   TagPlacement,
   TagGovernanceMode,
+  ChangelogConfig,
+  SiteHeadConfig,
   MetaTagsConfig,
 } from "./settings-types";
 
@@ -53,6 +57,22 @@ export const settings = {
     twitterCard: "summary_large_image",
     twitterCreator: "@Takazudo",
   } satisfies MetaTagsConfig as MetaTagsConfig,
+  // Site webfont - Noto Sans JP for JA + Latin body text. Emitted as real <head>
+  // links via settings.head (preconnect + async-loaded stylesheet). Never load
+  // the font via global.css @import: Tailwind v4 bundling can push it past the
+  // first style rule, making the browser silently drop it.
+  head: {
+    preconnect: [
+      { href: "https://fonts.googleapis.com" },
+      { href: "https://fonts.gstatic.com", crossorigin: "anonymous" },
+    ],
+    stylesheets: [
+      {
+        href: "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap",
+        async: true,
+      },
+    ],
+  } satisfies SiteHeadConfig as SiteHeadConfig,
   docsDir: "src/content/docs",
   defaultLocale: "en" as const,
   locales: {
@@ -67,6 +87,7 @@ export const settings = {
   tagVocabulary: false as boolean,
   frontmatterPreview: false as FrontmatterPreviewConfig | false,
   llmsTxt: true,
+  changelogs: false as ChangelogConfig[] | false,
   math: false,
   cjkFriendly: true as boolean,
   onBrokenMarkdownLinks: "warn" as "warn" | "error" | "ignore",
@@ -86,11 +107,12 @@ export const settings = {
   sidebarResizer: true as boolean,
   sidebarToggle: true as boolean,
   imageEnlarge: true as boolean,
+  dynamicPageTransition: false as boolean,
   htmlPreview: undefined as HtmlPreviewConfig | undefined,
   versions: false as VersionConfig[] | false,
   claudeResources: {
     claudeDir: ".claude",
-  } as { claudeDir: string; projectRoot?: string } | false,
+  } as { claudeDir: string; projectRoot?: string; scanRoot?: string } | false,
   defaultLocaleOnlyPrefixes: [
     "/docs/claude/",
     "/docs/claude-md/",
@@ -120,7 +142,7 @@ export const settings = {
     { type: "component", component: "language-switcher" },
   ] satisfies HeaderRightItem[] as HeaderRightItem[],
   // Enable the package-owned route-injection plugin (@takazudo/zudo-doc/plugins/routes):
-  // the 1.x package supplies the docs / 404 / sitemap / robots / tags / versions routes
+  // the 3.x package supplies the docs / 404 / sitemap / robots / tags / versions routes
   // at build time, so the host no longer ships those page stubs. zudoDocPreset() does NO
   // defaulting — omitting this field is treated as off (routes would not be injected).
   packageOwnedRoutes: true,
