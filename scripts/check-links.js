@@ -399,7 +399,11 @@ function entryKey(e) {
 
 async function main() {
   const rootDir = resolve(__dirname, "..");
-  const settingsPath = join(rootDir, "src", "config", "settings.ts");
+  // zudo-doc 4.x collapsed src/config/settings.ts into the single-entry
+  // `zudoDoc({...})` call in zfb.config.ts. The base/trailingSlash/docsDir/
+  // locales regexes below read from there now; omitted fields fall back to the
+  // package defaults ("/", false, "src/content/docs"), which match this site.
+  const settingsPath = join(rootDir, "zfb.config.ts");
   const basePath = await parseBasePath(settingsPath);
   const trailingSlash = await parseTrailingSlash(settingsPath);
   const distDir = join(rootDir, "dist");

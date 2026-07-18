@@ -5,7 +5,7 @@ Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, Tailwind CSS
 ## Commands
 
 ```bash
-pnpm dev              # Start zfb dev server (port 4321)
+pnpm dev              # Start dev: zfb dev server (port 4321) + doc-history-server (4322), via run-p
 pnpm build            # Build static site via zfb build
 pnpm preview          # Preview built site
 pnpm check            # zfb type checking
@@ -16,11 +16,13 @@ pnpm check:wrangler-pin # Verify wrangler version is pinned correctly
 pnpm check:template-drift # Check for template drift vs upstream
 pnpm format:md        # Format MDX files (write)
 pnpm format:md:check  # Format MDX files (check only)
-pnpm b4push           # Pre-push validation (format + typecheck + build)
-pnpm gen:z-index      # Generate z-index tokens
-pnpm check:z-index    # Check z-index tokens are up to date
+pnpm b4push           # Pre-push validation (format + drift + pins + typecheck + build + html + links)
 pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 ```
+
+> zudo-doc 4.x note: doc-history now runs as a separate process (`dev:history`),
+> so `pnpm dev` uses `run-p` to launch it alongside `zfb dev`. z-index tokens are
+> package-owned in 4.x, so the old `gen:z-index` / `check:z-index` scripts are gone.
 
 ## Content Structure
 
@@ -34,7 +36,7 @@ pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 
 ## Content Categories
 
-Top-level directories under `src/content/docs/`. Directories with header nav entries are mapped via `categoryMatch` in `src/config/settings.ts`:
+Top-level directories under `src/content/docs/`. Directories with header nav entries are mapped via `categoryMatch` in the `headerNav` of `zfb.config.ts`:
 
 - `getting-started/` - Overview, project setup, dev vs production mode
 - `architecture/` - Sidecar pattern, loading screen, process lifecycle
@@ -57,7 +59,7 @@ All documentation files use `.mdx` format with YAML frontmatter.
 
 ### Frontmatter Fields
 
-Schema defined in `zfb.config.ts` (collections) and `src/config/docs-schema.ts` (field definitions). There is NO `src/content.config.ts` -- collections live in `zfb.config.ts`.
+The whole site is configured through a single `zudoDoc({...})` call in `zfb.config.ts` (zudo-doc 4.x single-entry config API). The frontmatter schema and content collections are package-owned defaults (`@takazudo/zudo-doc`) — there is NO `src/config/docs-schema.ts` and NO `src/content.config.ts`. To override the schema, pass `buildDocsSchema` to `zudoDoc()`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -192,13 +194,13 @@ The `noPage: true` flag means the category has no landing page (just groups item
 
 ### Header Navigation
 
-Defined in `src/config/settings.ts` via `headerNav`. Each item maps to a top-level content directory via `categoryMatch`:
+Defined in the `zudoDoc({...})` call in `zfb.config.ts` via `headerNav`. Each item maps to a top-level content directory via `categoryMatch`:
 
 ```typescript
 { label: "Overview", path: "/docs/getting-started", categoryMatch: "getting-started" }
 ```
 
-`categoryMatch` must be a single top-level directory name. Adding a new header nav item requires editing `settings.ts`.
+`categoryMatch` must be a single top-level directory name. Adding a new header nav item requires editing `zfb.config.ts`.
 
 ## Content Creation Workflow
 
@@ -216,7 +218,7 @@ Defined in `src/config/settings.ts` via `headerNav`. Each item maps to a top-lev
 
 1. Create the directory under `src/content/docs/` (kebab-case)
 2. Create `index.mdx` with `title`, `description`, and `sidebar_position`
-3. Add a `headerNav` entry in `src/config/settings.ts` with `categoryMatch` pointing to the directory name
+3. Add a `headerNav` entry in `zfb.config.ts` with `categoryMatch` pointing to the directory name
 4. Mirror the directory structure under `src/content/docs-ja/`
 5. Run `pnpm build` to verify
 
@@ -239,23 +241,29 @@ The `tauri-wisdom` skill (`.claude/skills/tauri-wisdom/SKILL.md`) is **generated
 
 ## Project Layout
 
+In zudo-doc 4.x the host surface collapsed into the `@takazudo/zudo-doc`
+package (config API, components, utils, types, route helpers, design tokens are
+all package-owned). The project ships only a thin shell:
+
 ```
-pages/          # Host-app routing layer (zfb entry points)
+pages/                    # 3 route stubs only (rest injected by the package)
+  index.tsx               #   1-line re-export of the package home route
+  docs/[[...slug]].tsx    #   self-contained doc-route stub (dev-mode 404 fix)
+  [locale]/docs/[[...slug]].tsx  # locale-prefixed counterpart (i18n)
 src/
-  components/   # Shared UI components
-  config/       # settings.ts — site-wide config; docs-schema.ts — frontmatter schema
-  content/      # MDX doc pages (docs/ + docs-ja/)
-  utils/        # Shared utilities
-plugins/        # zfb integration plugins (.mjs)
-zfb.config.ts   # Build config (framework, collections, plugins, adapter)
+  content/                # MDX doc pages (docs/ + docs-ja/) — the actual content
+  styles/global.css       # package CSS imports + host font/brand overrides
+zfb.config.ts             # the ONE config file: a single zudoDoc({...}) call
+setup-preset.json         # scaffold config record (drives re-scaffold)
+scripts/                  # host check/gen scripts (drift, pins, links, doc-skill)
 ```
 
 ## Site Config
 
 - Base path: `/` (root — no subpath prefix)
 - Live URL: `https://zudo-tauri-wisdom.takazudomodular.com/`
-- Settings: `src/config/settings.ts`
-- Build config: `zfb.config.ts`
+- Config: `zfb.config.ts` — the entire site config is one `zudoDoc({...})` call
+  (`@takazudo/zudo-doc/config`); there is no `src/config/settings.ts` in 4.x
 
 ## CI/CD
 

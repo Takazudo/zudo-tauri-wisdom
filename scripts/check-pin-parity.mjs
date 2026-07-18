@@ -6,10 +6,11 @@
 // Verifies that related packages stay in lockstep within package.json.
 // Two version groups must be internally consistent:
 //
-//   zfb group (exact pins) — all three must be the same version:
+//   zfb group (exact pins) — all four must be the same version:
 //     dependencies["@takazudo/zfb"]
 //     dependencies["@takazudo/zfb-runtime"]
 //     dependencies["@takazudo/zfb-adapter-cloudflare"]
+//     dependencies["@takazudo/zfb-md-wasm"]
 //
 //   zudo-doc group (caret/tilde stripped before comparison) — all three
 //   must resolve to the same base version:
@@ -34,6 +35,7 @@ const ZFB_PACKAGES = [
   "@takazudo/zfb",
   "@takazudo/zfb-runtime",
   "@takazudo/zfb-adapter-cloudflare",
+  "@takazudo/zfb-md-wasm",
 ];
 
 const ZUDO_DOC_PACKAGES = [
