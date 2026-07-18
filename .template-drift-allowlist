@@ -34,3 +34,8 @@ pages/[locale]/docs/[[...slug]].tsx
 # (tauri-wisdom) and Claude + Codex targets, so it diverges from the template
 # default. The skill it emits is gitignored.
 scripts/setup-doc-skill.sh
+
+# ── Wide home page override (css-wisdom PR #182 parity) ──
+# pages/index.tsx is reconstructed to render HomePageView with `wide` (zudo-doc
+# 4.2.1 has no config toggle), diverging from the locked 1-line re-export.
+pages/index.tsx
