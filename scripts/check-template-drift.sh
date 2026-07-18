@@ -71,21 +71,15 @@ done < <(find "$BASE_DIR" -type f -print0 | sort -z)
 echo "Checking feature template files..."
 
 # Only check features that were scaffolded for this site.
-# Features not scaffolded (e.g. tauri, designTokenPanel, versioning) are
-# intentionally absent; their template files would produce spurious
-# [MISSING IN PROD] errors if checked.
 #
-# Feature name -> template directory mapping:
-#   i18n            -> i18n           (bilingual EN+JA docs)
-#   llms-txt        -> llmsTxt        (LLM-friendly text output)
-#   doc-history     -> docHistory     (git-based doc history)
-#   body-foot-util  -> bodyFootUtil   (github.ts for footer links)
-#   claude-resources -> claudeResources (Claude CLAUDE.md + skills integration)
-#   image-enlarge   -> imageEnlarge   (image enlarge on click)
-#   sidebar-toggle  -> sidebarToggle  (collapsible sidebar toggle)
-#   doc-tags        -> docTags        (tags pages; enabled: docTags: false in settings)
-#   tag-governance  -> tagGovernance  (tags-audit / tags-suggest scripts)
-for feature in i18n llmsTxt docHistory bodyFootUtil claudeResources imageEnlarge sidebarToggle docTags tagGovernance; do
+# In zudo-doc 4.x nearly every feature is config-driven and package-owned, so it
+# ships NO host files. The 4.x create-zudo-doc templates/features directory only
+# carries: claudeSkills, i18n, tauri, tauriDev. Of those this site scaffolds only
+# `i18n` (bilingual EN+JA docs — ships pages/[locale]/docs/[[...slug]].tsx). The
+# rest are intentionally absent; the loop tolerates a missing feature dir, so
+# listing extra names would just be skipped, but we keep this list to exactly the
+# features actually scaffolded here.
+for feature in i18n; do
   feature_dir="$FEATURES_DIR/$feature"
   files_dir="$feature_dir/files"
   if [[ ! -d "$files_dir" ]]; then
