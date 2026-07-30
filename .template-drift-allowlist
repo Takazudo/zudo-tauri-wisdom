@@ -11,16 +11,21 @@
 # 4.x create-zudo-doc templates/base ships only pages/index.tsx,
 # pages/docs/[[...slug]].tsx, scripts/setup-doc-skill.sh, src/styles/global.css,
 # tsconfig.json (+ the i18n feature's pages/[locale]/docs/[[...slug]].tsx). Of
-# those, only tsconfig.json is byte-identical to the template (NOT listed); the
-# five below diverge intentionally.
+# those, tsconfig.json AND pages/index.tsx are byte-identical to the template
+# (NOT listed); the four below diverge intentionally.
 #
 # Re-validated against create-zudo-doc 4.4.13 (up from 4.2.1): the base file set
 # and the feature directory set (claudeSkills, i18n, tauri, tauriDev) are both
 # unchanged, so check-template-drift.sh's `for feature in i18n` loop still scans
 # the right feature. Every entry below still genuinely diverges for the reason
-# stated, and tsconfig.json is still byte-identical. The only template whose
-# content changed between 4.2.1 and 4.4.13 is scripts/setup-doc-skill.sh — see
-# its section below.
+# stated. The only template whose content changed between 4.2.1 and 4.4.13 is
+# scripts/setup-doc-skill.sh — see its section below.
+#
+# pages/index.tsx was listed until 4.4.13 and is deliberately NOT listed now:
+# the wide home grid needed a hand-reconstructed route only while zudo-doc had
+# no toggle for it (zudolab/zudo-doc#2959). 4.4.x ships `home.wide`, so the
+# config carries the intent and the file is back to the locked 1-line re-export
+# — one fewer host file to keep reconciled on every future bump.
 
 # ── Host customization: brand + tight-token global.css ────────────────────
 # global.css carries this site's font overrides (Noto Sans JP body + Futura
@@ -52,10 +57,3 @@ pages/[locale]/docs/[[...slug]].tsx
 # heavily customized file, which is a separate piece of work from a version
 # bump. Recorded so it is not silently lost.
 scripts/setup-doc-skill.sh
-
-# ── Wide home page override (css-wisdom PR #182 parity) ──
-# pages/index.tsx is reconstructed to render HomePageView with `wide` (zudo-doc
-# has no config toggle for this), diverging from the locked 1-line re-export.
-# Still required on 4.4.13 — the base template for this file is byte-identical
-# between 4.2.1 and 4.4.13, so upstream has not added a toggle to adopt.
-pages/index.tsx
