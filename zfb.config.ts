@@ -47,6 +47,13 @@ export default defineConfig(
       ],
     },
 
+    // Wide home grid on `/` and every locale home. Replaces the former
+    // hand-reconstructed pages/index.tsx, which existed only because zudo-doc
+    // 4.2.1 had no toggle for this (zudolab/zudo-doc#2959). 4.4.x added
+    // `home.wide`, so the package-owned route is used again and index.tsx is
+    // back to the locked 1-line re-export.
+    home: { wide: true },
+
     // ── Locales (bilingual EN default + JA) ───────────────────────────────
     locales: {
       ja: { label: "JA", dir: "src/content/docs-ja" },
