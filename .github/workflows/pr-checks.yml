@@ -103,6 +103,12 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
+          # This job deliberately skips `pnpm install`, so pnpm is never set up.
+          # setup-node defaults package-manager-cache to true, which probes for
+          # the repo's package manager and hard-fails with "Unable to locate
+          # executable file: pnpm". Disable the probe rather than adding a pnpm
+          # setup step we would otherwise have no use for.
+          package-manager-cache: false
 
       - name: Check category metadata
         run: node scripts/check-category-meta.mjs
