@@ -20,6 +20,10 @@ export default defineConfig(
     // ── Site identity ─────────────────────────────────────────────────────
     siteName: "zudo-tauri-wisdom",
     siteDescription: "Takazudo's Tauri dev notes for me and AI agents",
+    // Must be set explicitly: zudo-doc's `logo` defaults to "auto" (4.4.0+),
+    // which renders a generated placeholder mark over this site's own banner.
+    // Omitting this line silently loses the brand asset, with a green build.
+    logo: "/img/logo.svg",
     githubUrl: "https://github.com/Takazudo/zudo-tauri-wisdom",
     siteUrl: "https://zudo-tauri-wisdom.takazudomodular.com",
     metaTags: {
