@@ -173,6 +173,11 @@ jobs:
       - name: Check wrangler pin parity
         run: pnpm check:wrangler-pin
 
+      # zfb production HTML is minified with unquoted attributes. Keep the
+      # local zudolab/zudo-doc#3720 compatibility patch covered in CI.
+      - name: Run link checker regression tests
+        run: pnpm test:links
+
       - name: Run type checking
         run: pnpm check
 

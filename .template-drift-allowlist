@@ -6,20 +6,9 @@
 # Format: one repo-relative path per line (no leading slash).
 # Blank lines and `#` comments are ignored.
 #
-# Reconciled for the zudo-doc 4.x "single-entry config" baseline (epic
-# zudolab/zudo-doc#2651): the host surface collapsed into the package, so the
-# 4.x create-zudo-doc templates/base ships only pages/index.tsx,
-# pages/docs/[[...slug]].tsx, scripts/setup-doc-skill.sh, src/styles/global.css,
-# tsconfig.json (+ the i18n feature's pages/[locale]/docs/[[...slug]].tsx). Of
-# those, tsconfig.json AND pages/index.tsx are byte-identical to the template
-# (NOT listed); the four below diverge intentionally.
-#
-# Re-validated against create-zudo-doc 4.4.13 (up from 4.2.1): the base file set
-# and the feature directory set (claudeSkills, i18n, tauri, tauriDev) are both
-# unchanged, so check-template-drift.sh's `for feature in i18n` loop still scans
-# the right feature. Every entry below still genuinely diverges for the reason
-# stated. The only template whose content changed between 4.2.1 and 4.4.13 is
-# scripts/setup-doc-skill.sh — see its section below.
+# Reconciled against create-zudo-doc 5.13.1. Non-allowlisted scaffold files
+# remain byte-identical to the pinned template; the five paths below diverge
+# intentionally. The drift check scans templates/base plus the i18n feature.
 #
 # pages/index.tsx was listed until 4.4.13 and is deliberately NOT listed now:
 # the wide home grid needed a hand-reconstructed route only while zudo-doc had
@@ -47,8 +36,7 @@ pages/[locale]/docs/[[...slug]].tsx
 # (tauri-wisdom) and Claude + Codex targets, so it diverges from the template
 # default. The skill it emits is gitignored.
 #
-# NOTE (4.4.13): this is the one template whose content changed since 4.2.1.
-# Upstream added nested-project / worktree correctness — PROJECT_PREFIX,
+# NOTE (5.13.1): upstream includes nested-project / worktree correctness — PROJECT_PREFIX,
 # REPO_DOCS_DIR, MAIN_PROJECT_DIR and package.json-driven format-script
 # detection (zudolab/zudo-doc#2918) — so the emitted SKILL.md points at the main
 # worktree's project dir instead of the current worktree. Our fork predates all
@@ -57,3 +45,11 @@ pages/[locale]/docs/[[...slug]].tsx
 # heavily customized file, which is a separate piece of work from a version
 # bump. Recorded so it is not silently lost.
 scripts/setup-doc-skill.sh
+
+# ── Minified HTML compatibility: check-links.js ───────────────────────────
+# zfb production HTML emits unquoted href/id attributes. The 5.13.1 scaffold
+# checker only recognizes quoted values, so this local patch adds unquoted
+# parsing plus entity decoding, covered by scripts/check-links.test.mjs. The
+# unquoted token excludes backslashes so escaped serialized demo markup is not
+# mistaken for a live link. Tracked upstream as zudolab/zudo-doc#3720.
+scripts/check-links.js
