@@ -122,7 +122,7 @@ Types: `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>`, `<Caution>`
 
 Additional directive types:
 
-```markdown
+````markdown
 :::details[Summary text]
 Collapsible content here.
 :::
@@ -139,7 +139,7 @@ pnpm install
 :::caution
 Caution content here.
 :::
-```
+````
 
 ### Mermaid Diagrams
 
