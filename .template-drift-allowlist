@@ -38,13 +38,15 @@ src/styles/global.css
 # The patched stubs therefore diverge from the unpatched templates/base +
 # features/i18n copies.
 #
-# NOTE (5.16.1): both stubs are byte-identical to the 5.13.1 templates plus that
-# patch. 5.16.1 changed the templates in COMMENT PROSE ONLY — the header no
-# longer claims the stub is REQUIRED because injected dynamic routes 404 in
-# `zfb dev` (zfb serves them since 2.13.1); it now says the stub is retained for
-# explicit host route ownership. Executable code is unchanged. Not adopted in
-# the 5.16.1 sync (Takazudo/zudo-tauri-wisdom#76) because a concurrent task was
-# building from these stubs; refresh the header prose on the next bump.
+# NOTE (5.16.1): the 5.16.1 template header prose has been adopted in both
+# stubs (Takazudo/zudo-tauri-wisdom#77) — the header no longer claims the stub
+# is REQUIRED because injected dynamic routes 404 in `zfb dev` (zfb serves
+# them since 2.13.1); it now says the stub is retained for explicit host route
+# ownership, matching the 5.16.1 template verbatim. The only remaining
+# divergence from the unpatched templates/base + features/i18n copies is the
+# docHistory patch described above (the DocHistory import + its merge into
+# createChrome's hostBindings) — executable code otherwise matches the
+# 5.16.1 templates byte-for-byte.
 pages/docs/[[...slug]].tsx
 pages/[locale]/docs/[[...slug]].tsx
 
