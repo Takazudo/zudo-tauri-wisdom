@@ -6,9 +6,16 @@
 # Format: one repo-relative path per line (no leading slash).
 # Blank lines and `#` comments are ignored.
 #
-# Reconciled against create-zudo-doc 5.13.1. Non-allowlisted scaffold files
+# Reconciled against create-zudo-doc 5.16.1. Non-allowlisted scaffold files
 # remain byte-identical to the pinned template; the five paths below diverge
 # intentionally. The drift check scans templates/base plus the i18n feature.
+#
+# NOTE: `check_pair` in scripts/check-template-drift.sh returns on an allowlist
+# hit BEFORE the file-existence check, so an allowlisted file that has gone
+# stale against a newer baseline — or vanished — passes the gate silently. The
+# five paths here must therefore be three-way compared (old template / new
+# template / repo copy) by hand on every create-zudo-doc bump; a green
+# check:template-drift says nothing about them.
 #
 # pages/index.tsx was listed until 4.4.13 and is deliberately NOT listed now:
 # the wide home grid needed a hand-reconstructed route only while zudo-doc had
@@ -20,6 +27,8 @@
 # global.css carries this site's font overrides (Noto Sans JP body + Futura
 # display face) and the [data-header-logo] brand rule on top of the package's
 # theme.css/content.css/features.css imports.
+#
+# 5.16.1: template unchanged since 5.13.1 — nothing upstream to adopt.
 src/styles/global.css
 
 # ── Generator patch: docHistory-wired doc-route stubs ─────────────────────
@@ -28,6 +37,16 @@ src/styles/global.css
 # (without the patch the doc-history button never hydrates on these routes).
 # The patched stubs therefore diverge from the unpatched templates/base +
 # features/i18n copies.
+#
+# NOTE (5.16.1): the 5.16.1 template header prose has been adopted in both
+# stubs (Takazudo/zudo-tauri-wisdom#77) — the header no longer claims the stub
+# is REQUIRED because injected dynamic routes 404 in `zfb dev` (zfb serves
+# them since 2.13.1); it now says the stub is retained for explicit host route
+# ownership, matching the 5.16.1 template verbatim. The only remaining
+# divergence from the unpatched templates/base + features/i18n copies is the
+# docHistory patch described above (the DocHistory import + its merge into
+# createChrome's hostBindings) — executable code otherwise matches the
+# 5.16.1 templates byte-for-byte.
 pages/docs/[[...slug]].tsx
 pages/[locale]/docs/[[...slug]].tsx
 
@@ -36,20 +55,29 @@ pages/[locale]/docs/[[...slug]].tsx
 # (tauri-wisdom) and Claude + Codex targets, so it diverges from the template
 # default. The skill it emits is gitignored.
 #
-# NOTE (5.13.1): upstream includes nested-project / worktree correctness — PROJECT_PREFIX,
-# REPO_DOCS_DIR, MAIN_PROJECT_DIR and package.json-driven format-script
-# detection (zudolab/zudo-doc#2918) — so the emitted SKILL.md points at the main
-# worktree's project dir instead of the current worktree. Our fork predates all
-# of that and still hard-codes `$REPO_ROOT/src/content/docs` and `pnpm
-# format:md`. Deliberately NOT adopted here: porting it means re-forking a
-# heavily customized file, which is a separate piece of work from a version
-# bump. Recorded so it is not silently lost.
+# NOTE (5.16.1): upstream has moved further ahead of this fork, which predates
+# all of it and still hard-codes `$REPO_ROOT/src/content/docs`, `docs-ja`, and
+# `pnpm format:md`:
+#   - nested-project / worktree correctness — PROJECT_PREFIX, REPO_DOCS_DIR,
+#     MAIN_PROJECT_DIR and package.json-driven format-script detection
+#     (zudolab/zudo-doc#2918), so the emitted SKILL.md points at the main
+#     worktree's project dir instead of the current worktree;
+#   - new in 5.14.0–5.16.1: the locale map is parsed out of zfb.config.ts
+#     (defaultLocale / docsDir / locales) instead of probing for a docs-ja
+#     directory, one symlink and one SKILL.md section per configured locale, and
+#     an explicit warning against discovering roots with a `src/content/docs-*`
+#     glob (it also matches version snapshots like `docs-v1-ja`).
+# Deliberately NOT adopted here: porting it means re-forking a heavily
+# customized file, which is a separate piece of work from a version bump.
+# Recorded so it is not silently lost.
 scripts/setup-doc-skill.sh
 
-# ── Minified HTML compatibility: check-links.js ───────────────────────────
-# zfb production HTML emits unquoted href/id attributes. The 5.13.1 scaffold
-# checker only recognizes quoted values, so this local patch adds unquoted
-# parsing plus entity decoding, covered by scripts/check-links.test.mjs. The
-# unquoted token excludes backslashes so escaped serialized demo markup is not
-# mistaken for a live link. Tracked upstream as zudolab/zudo-doc#3720.
+# ── Protocol-relative external links: check-links.js ──────────────────────
+# The 5.13.1-era fork of this file (unquoted href/id parsing + entity decoding
+# for zfb's minified production HTML) is GONE: zudolab/zudo-doc#3720 shipped
+# that upstream, so this file is now the 5.16.1 template verbatim except for a
+# single line. `//host/path` is an external protocol-relative URL, but the
+# scaffold's scheme skip-list omits it, so it resolves as an internal path and
+# is reported broken. One regex alternation restores that; covered by
+# scripts/check-links.test.mjs. Not yet reported upstream.
 scripts/check-links.js
