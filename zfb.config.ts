@@ -64,6 +64,12 @@ export default defineConfig(
     },
 
     // ── Features ──────────────────────────────────────────────────────────
+    // Must be set explicitly: zudo-doc's `sitemap` defaults to false, and the
+    // disabled state is not "no sitemap" — the route is still emitted, as an
+    // empty <urlset>. That is a positive "this site has no indexable pages"
+    // signal to crawlers, produced by a fully green build (#78). robots.txt
+    // reads the same flag, so its `Sitemap:` line disappears along with it.
+    sitemap: true,
     docMetainfo: true,
     llmsTxt: true,
     cjkFriendly: true,
