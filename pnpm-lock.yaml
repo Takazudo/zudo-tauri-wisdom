@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@takazudo/zdtp':
-        specifier: 0.8.0
-        version: 0.8.0(preact@10.29.2)
       '@takazudo/zfb':
         specifier: 2.16.0
         version: 2.16.0
@@ -25,7 +22,7 @@ importers:
         version: 2.16.0(@takazudo/zfb@2.16.0)
       '@takazudo/zudo-doc':
         specifier: ^5.22.1
-        version: 5.22.1(@takazudo/zdtp@0.8.0(preact@10.29.2))(@takazudo/zfb-md-wasm@2.16.0)(@takazudo/zfb-runtime@2.16.0(@takazudo/zfb@2.16.0))(@takazudo/zfb@2.16.0)(@takazudo/zudo-doc-history-server@5.22.1)(@types/node@22.19.21)(diff@8.0.4)(katex@0.16.47)(preact@10.29.2)(zod@4.4.3)
+        version: 5.22.1(@takazudo/zfb-md-wasm@2.16.0)(@takazudo/zfb-runtime@2.16.0(@takazudo/zfb@2.16.0))(@takazudo/zfb@2.16.0)(@takazudo/zudo-doc-history-server@5.22.1)(@types/node@22.19.21)(diff@8.0.4)(katex@0.16.47)(preact@10.29.2)(zod@4.4.3)
       '@takazudo/zudo-doc-history-server':
         specifier: ^5.22.1
         version: 5.22.1
@@ -776,16 +773,6 @@ packages:
   '@speed-highlight/core@1.2.17':
     resolution: {integrity: sha512-Z92FwKpCtfaW1V0jTU/fh3QzYEZN8wDwrzRIBoADCJfn4mJCNcJN/XegifX7BDrQ8/h9Xh/JnbyMchL0FqXrkg==}
 
-  '@tailwindcss/browser@4.3.2':
-    resolution: {integrity: sha512-R6hewP9HHwLAY88bFkgAYFIQMRGi9bqx6sR1anI3IThTJtwhPlAm4aHIzDKrnJ8Ct4M3d5A9PCsah8Z5+EjLiQ==}
-
-  '@takazudo/zdtp@0.8.0':
-    resolution: {integrity: sha512-TbqkxoKCjwqFb1Jk2OURpUqphCm65mniRlFiCcCsrwqjpMBZS1/21wpnZ3SNdzuFQdt826jIhv/cGYlh309wiw==}
-    engines: {node: '>=22.0.0', pnpm: '>=10.0.0'}
-    hasBin: true
-    peerDependencies:
-      preact: ^10.29.1
-
   '@takazudo/zfb-adapter-cloudflare@2.16.0':
     resolution: {integrity: sha512-aEe99HsETDrS72fDeiy7xACY8/S7K5Htu7yJWNpp/cRXQWkEc6zNVFRYPkrqHE78Z/SdnuD5h1fG0smROeR1Kw==}
     engines: {node: '>=22.0.0', pnpm: '>=10.0.0'}
@@ -942,10 +929,6 @@ packages:
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
-
-  culori@4.0.2:
-    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -1264,9 +1247,6 @@ packages:
   supports-color@10.2.2:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
-
-  tailwind-merge@3.6.0:
-    resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
@@ -1815,15 +1795,6 @@ snapshots:
 
   '@speed-highlight/core@1.2.17': {}
 
-  '@tailwindcss/browser@4.3.2': {}
-
-  '@takazudo/zdtp@0.8.0(preact@10.29.2)':
-    dependencies:
-      '@tailwindcss/browser': 4.3.2
-      culori: 4.0.2
-      preact: 10.29.2
-      tailwind-merge: 3.6.0
-
   '@takazudo/zfb-adapter-cloudflare@2.16.0': {}
 
   '@takazudo/zfb-darwin-arm64@2.16.0':
@@ -1864,7 +1835,7 @@ snapshots:
 
   '@takazudo/zudo-doc-history-server@5.22.1': {}
 
-  '@takazudo/zudo-doc@5.22.1(@takazudo/zdtp@0.8.0(preact@10.29.2))(@takazudo/zfb-md-wasm@2.16.0)(@takazudo/zfb-runtime@2.16.0(@takazudo/zfb@2.16.0))(@takazudo/zfb@2.16.0)(@takazudo/zudo-doc-history-server@5.22.1)(@types/node@22.19.21)(diff@8.0.4)(katex@0.16.47)(preact@10.29.2)(zod@4.4.3)':
+  '@takazudo/zudo-doc@5.22.1(@takazudo/zfb-md-wasm@2.16.0)(@takazudo/zfb-runtime@2.16.0(@takazudo/zfb@2.16.0))(@takazudo/zfb@2.16.0)(@takazudo/zudo-doc-history-server@5.22.1)(@types/node@22.19.21)(diff@8.0.4)(katex@0.16.47)(preact@10.29.2)(zod@4.4.3)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@22.19.21)
       '@takazudo/zfb': 2.16.0
@@ -1881,7 +1852,6 @@ snapshots:
       yaml: 2.9.0
       zod: 4.4.3
     optionalDependencies:
-      '@takazudo/zdtp': 0.8.0(preact@10.29.2)
       '@takazudo/zfb-md-wasm': 2.16.0
       '@takazudo/zudo-doc-history-server': 5.22.1
       diff: 8.0.4
@@ -1950,8 +1920,6 @@ snapshots:
       path-key: 3.1.1
       shebang-command: 2.0.0
       which: 2.0.2
-
-  culori@4.0.2: {}
 
   debug@4.4.3:
     dependencies:
@@ -2464,8 +2432,6 @@ snapshots:
       character-entities-legacy: 3.0.0
 
   supports-color@10.2.2: {}
-
-  tailwind-merge@3.6.0: {}
 
   tslib@2.8.1:
     optional: true
