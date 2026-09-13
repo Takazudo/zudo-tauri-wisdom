@@ -33,7 +33,6 @@
     "setup:doc-skill:both": "bash scripts/setup-doc-skill.sh --target both"
   },
   "dependencies": {
-    "@takazudo/zdtp": "0.8.0",
     "@takazudo/zfb": "2.16.0",
     "@takazudo/zfb-adapter-cloudflare": "2.16.0",
     "@takazudo/zfb-md-wasm": "2.16.0",
