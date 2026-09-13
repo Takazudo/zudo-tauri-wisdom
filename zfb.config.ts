@@ -57,6 +57,7 @@ export default defineConfig(
     // `home.wide`, so the package-owned route is used again and index.tsx is
     // back to the locked 1-line re-export.
     home: { wide: true },
+    themePack: "fjord",
 
     // ── Locales (bilingual EN default + JA) ───────────────────────────────
     locales: {
