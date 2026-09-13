@@ -129,6 +129,58 @@ Chromium ベースのテスト結果は、ユーザーが実際に見るもの�
 
 CI は実用的な理由で Chromium を使用する（ヘッドレスモードでより高速かつ安定）が、CI テストは WebKit 固有の動作を避けるよう明示的に設計されている。より深いブラウザ統合をテストする `@interactive` テストは、ローカルでのみ WebKit を使って実行する。
 
+## 実際のウィンドウ動作にはネイティブWebDriverレーンを追加する
+
+Playwright WebKitが操作するのはあくまでブラウザプロセスであり、パッケージ化されたTauriアプリケーションではありません。Tauri IPC、複数のネイティブウィンドウ、AppKitのフォーカス、OSのクローズライフサイクルに依存する動作までは証明できません。ただし、これらをすべて手動テストに残す必要はありません。macOSでは専用テストバンドルに[`tauri-plugin-wdio-webdriver`](https://crates.io/crates/tauri-plugin-wdio-webdriver)を登録し、WebdriverIOから実際のTauri WebViewを操作できます。
+
+このレーンは独立させ、直列で実行してください。
+
+- ドライバー依存は `native-e2e` のようなオプトインCargo featureの背後に置き、通常ビルドでは登録しない。
+- 専用のTauri設定、bundle identifier、アプリケーション名、状態ディレクトリ、incognito WebView storeを使い、テストが普段使いのインストールやサインイン済みアカウントに触れないようにする。
+- テスト対象ウィンドウにはembedded driverのcapabilityだけを許可する。本番capability setにはドライバー権限を含めない。
+- 操作にはW3C pointer/keyboard actionsを使う。JavaScriptでDOM eventをdispatchすると、テスト対象であるエディター、フォーカス、クリップボード、ネイティブウィンドウの経路を迂回しかねない。
+- embedded driverが固定portを所有する場合や、journeyが実際のアプリケーションウィンドウを作成する場合は `maxInstances: 1` にする。
+- 失敗時には、検出できる全ウィンドウのスクリーンショットに加え、秘匿化済みのtitle、URL、realm identifier、frontend error marker、protocol traceを保存する。選択中のWebDriver contextが1つだけでは、マルチウィンドウの不具合を再構成しにくい。
+- 専用fixture stateを必ず消去し、driver portが閉じるまで待つ。runnerが中断された場合も、完全一致するテストバンドルの実行ファイルだけを終了する。
+
+```toml
+# src-tauri/Cargo.toml
+[features]
+native-e2e = ["dep:tauri-plugin-wdio-webdriver"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-wdio-webdriver = { version = "1.3.0", optional = true }
+```
+
+```rust
+#[cfg(all(target_os = "macos", feature = "native-e2e"))]
+let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+```
+
+```ts
+// wdio.conf.ts (excerpt)
+export const config = {
+  maxInstances: 1,
+  hostname: "127.0.0.1",
+  port: 45678,
+  services: [["@wdio/tauri-service", { driverProvider: "embedded" }]],
+  capabilities: [
+    {
+      browserName: "tauri",
+      "tauri:options": { application: TEST_APP_BINARY },
+    },
+  ],
+};
+```
+
+このレーンには本番除外チェックも明示的に加えてください。`native-e2e` なしの通常Cargo dependency graphを調べ、通常の本番bundleをビルドし、そのcapabilityと生成物にdriver/plugin/test bootstrapのmarkerがないことをscanします。ネイティブテストがgreenでも、自動化surfaceを誤って出荷していれば十分ではありません。
+
+<Tip>
+
+このレーンは、実際のウィンドウ作成・再利用、ウィンドウ間event transport、native close/focus、installed WebViewに意味論が依存するinput pathという薄いnative boundaryだけに使ってください。通常のrenderingやDOM journeyは、より高速なPlaywrightレーンに残します。
+
+</Tip>
+
 ## 新しいテストの書き方
 
 以下の判断ツリーに従う。
