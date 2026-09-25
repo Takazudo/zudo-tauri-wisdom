@@ -6,7 +6,7 @@
 # Format: one repo-relative path per line (no leading slash).
 # Blank lines and `#` comments are ignored.
 #
-# Reconciled against create-zudo-doc 5.22.1. Non-allowlisted scaffold files
+# Reconciled against create-zudo-doc 5.27.0. Non-allowlisted scaffold files
 # remain byte-identical to the pinned template; the four paths below diverge
 # intentionally. The drift check scans templates/base plus the i18n feature.
 #
@@ -28,7 +28,7 @@
 # display face) and the [data-header-logo] brand rule on top of the package's
 # theme.css/content.css/features.css imports.
 #
-# 5.22.1: template unchanged since 5.13.1 — nothing upstream to adopt.
+# 5.27.0: template unchanged since 5.13.1 — nothing upstream to adopt.
 src/styles/global.css
 
 # ── Generator patch: docHistory-wired doc-route stubs ─────────────────────
@@ -38,8 +38,8 @@ src/styles/global.css
 # The patched stubs therefore diverge from the unpatched templates/base +
 # features/i18n copies.
 #
-# NOTE (5.22.1): base templates and the docHistory transformer are unchanged
-# between 5.16.1 and 5.22.1, so the stubs needed no edit in that sync.
+# NOTE (5.27.0): base templates and the docHistory transformer are unchanged
+# between 5.16.1 and 5.27.0, so the stubs needed no edit in those syncs.
 # NOTE (5.16.1): the 5.16.1 template header prose has been adopted in both
 # stubs (Takazudo/zudo-tauri-wisdom#77) — the header no longer claims the stub
 # is REQUIRED because injected dynamic routes 404 in `zfb dev` (zfb serves
@@ -79,5 +79,5 @@ scripts/setup-doc-skill.sh
 
 # check-links.js was listed through 5.16.1 for a one-line protocol-relative
 # (`//host`) skip. zudo-doc 5.17.0 fixed that upstream (it now reports those
-# hrefs as informational notices), so from 5.22.1 the file is the template
+# hrefs as informational notices), so from 5.22.1 (now 5.27.0) the file is the template
 # verbatim and is deliberately NOT listed — the drift gate guards it again.
