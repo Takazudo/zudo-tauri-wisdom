@@ -14,6 +14,24 @@ sidebar_position: 7
 
 インストールしたツールの launcher と package metadata を調べ、native package と executable を特定する。macOS arm64/x64、Linux GNU/musl、Windows MSVC と `.exe` などを区別し、未対応 target は明示的に失敗させる。汎用 OS/architecture 表を万能とせず、固定した launcher と対応表の一致をテストする。隣接 library や data file が必要なツールもある。
 
+### target と package の具体的な対応例
+
+次の package 名と実行ファイルのパスは**架空のプレースホルダー**であり、install 対象や特定ツールの対応 target を示すものではない。固定したツールの launcher にある実際の対応表へ置き換える。第1列は [Rust の target triple](https://doc.rust-lang.org/rustc/platform-support.html)を使うが、package の命名規則は配布者ごとに異なる。
+
+| 配布 target | 架空の platform package | package 内の実行ファイル |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | `@scope/tool-darwin-arm64` | `tool` |
+| `x86_64-apple-darwin` | `@scope/tool-darwin-x64` | `tool` |
+| `aarch64-unknown-linux-gnu` | `@scope/tool-linux-arm64-gnu` | `tool` |
+| `x86_64-unknown-linux-gnu` | `@scope/tool-linux-x64-gnu` | `tool` |
+| `aarch64-unknown-linux-musl` | `@scope/tool-linux-arm64-musl` | `tool` |
+| `x86_64-unknown-linux-musl` | `@scope/tool-linux-x64-musl` | `tool` |
+| `x86_64-pc-windows-msvc` | `@scope/tool-win32-x64-msvc` | `tool.exe` |
+
+この例の staging 先は `node_modules/<platform-package>/tool`（または `tool.exe`）。実際の package は別の directory に配置する場合がある。`.bin` wrapper のパスを組み立てず、pnpm の symlink を含むインストール済み package の構成から解決する。
+
+staging script を実行するマシンではなく、ABI/libc を含む**配布 target**で選ぶ。macOS arm64 の build host で x64 版を作るなら x64 の行を選ぶ。同じ CPU でも Linux GNU と musl は別の選択肢になる。検証済み対応表にない target は unsupported-target エラーで staging を停止し、host binary や別 ABI へ fallback しない。選んだ package/version が実際に install されていることを確認し、packaging 前に実行ファイルを検証する。
+
 `node_modules/.bin/tool` が native とは限らない。`#!/usr/bin/env node` を持つ shell/JavaScript launcher なら、platform binary があっても Node 依存が戻る。spawn 前に解決した binary を確認する。
 
 ```rust
