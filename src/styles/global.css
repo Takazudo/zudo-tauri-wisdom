@@ -1,30 +1,20 @@
-/* Cascade layers: preflight → flow → (unlayered utilities). Tokens/base rules
-   (colors, spacing, typography scale, z-index tiers, [id] scroll-margin,
-   ::selection, search-highlight, find-in-page, doc-history diff viewer, …) all
-   ship from @takazudo/zudo-doc/theme.css + content.css + features.css in 4.x, so
-   the host global.css only carries this project's genuine overrides. */
-@layer zd-preflight, zd-flow;
-@import "tailwindcss/preflight" layer(zd-preflight);
-@import "tailwindcss/utilities";
+/* zfb's zudo-wind preset owns the reset and generated utility layer. Declare
+   the package layers first so authored flow styles keep their cascade order. */
+@layer zw-reset, zd-flow;
 
-/* Package-shipped tokens, safelist, content typography, and feature CSS.
-   Order is load-bearing — theme.css MUST precede features.css. Do not reorder. */
+/* The zdtp stylesheet is inserted after theme.css only when the feature is
+   selected (see features/design-token-panel.ts). It carries zdtp's own bytes. */
 @import "@takazudo/zudo-doc/theme.css";
-@import "@takazudo/zudo-doc/safelist.css";
 @import "@takazudo/zudo-doc/content.css";
 @import "@takazudo/zudo-doc/page-loading.css";
 @import "@takazudo/zudo-doc/features.css";
-
-/* Scan this project's own source for Tailwind utility classes. */
-@source "src/content/**/*.{mdx,md}";
-@source "pages/**/*.{tsx,ts,jsx,js}";
 
 /* ── Host token overrides ──────────────────────────────────────────────────
    Brand typography. Noto Sans JP is the body face (loaded as a webfont via the
    `head` config in zfb.config.ts); it overrides the package theme.css default
    (--font-sans: system-ui). Futura is the display face for page h1 titles and
    the header site name — a verbatim carryover of the pre-zfb site's token. */
-@theme {
+:root {
   --font-noto:
     'Noto Sans', 'Noto Sans JP', ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic Pro',
@@ -48,7 +38,14 @@
   --zdc-doc-title-font: var(--font-futura);
   --zdc-doc-title-weight: var(--font-weight-normal, 400);
 }
-[data-header-logo] {
+a[data-header-logo] {
   font-family: var(--font-futura);
   font-weight: var(--font-weight-normal, 400);
+}
+
+/* Host branding must also win over the selected theme pack’s root tokens. */
+html:root[data-theme-pack] {
+  --font-sans: var(--font-noto);
+  --zdc-doc-title-font: var(--font-futura);
+  --zdc-doc-title-weight: var(--font-weight-normal, 400);
 }

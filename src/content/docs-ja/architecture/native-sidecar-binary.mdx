@@ -1,0 +1,42 @@
+---
+title: 実行時 Node 不要のネイティブ sidecar
+description: 対象プラットフォームのネイティブツールをビルド時に同梱し、ユーザーの Node や package manager なしで起動する
+sidebar_position: 7
+---
+
+## 自己完結したランタイムを優先する
+
+ツールがネイティブプラットフォーム binary を配布しているなら、ユーザーの Node/pnpm を要求せずビルド時に解決して同梱する。対応ツールでの選択肢であり、すべての npm CLI が native という意味ではない。必要な場合は[実行時 Node 検出](../rust-backend/node-detection.mdx)を参照。
+
+`beforeBuildCommand` など setup/build pipeline で lockfile に従って install し、必要な runtime asset だけ staging する。ビルドマシンの architecture を誤って使わず、配布 target から解決する。cross compile では別 platform package の明示的 install が必要な場合がある。
+
+## 実際の実行ファイルを解決する
+
+インストールしたツールの launcher と package metadata を調べ、native package と executable を特定する。macOS arm64/x64、Linux GNU/musl、Windows MSVC と `.exe` などを区別し、未対応 target は明示的に失敗させる。汎用 OS/architecture 表を万能とせず、固定した launcher と対応表の一致をテストする。隣接 library や data file が必要なツールもある。
+
+`node_modules/.bin/tool` が native とは限らない。`#!/usr/bin/env node` を持つ shell/JavaScript launcher なら、platform binary があっても Node 依存が戻る。spawn 前に解決した binary を確認する。
+
+```rust
+fn validate_binary(path: &std::path::Path) -> std::io::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not executable"));
+        }
+    }
+    Ok(())
+}
+```
+
+パスなし、ファイルではなくディレクトリ、Unix execute bit の欠落を別々に診断する。mode bit は事前確認にすぎない。architecture、署名、noexec mount、library 欠落、アクセス制御などで spawn は失敗し得る。staging/copy では実行権限と symlink を保持する。
+
+## 実行時の依存全体を確認する
+
+native launcher でも JS plugin や設定ツールを Node 経由で動かせば Node-free ではない。選択した tool/config を調べ、対応する場合だけ optional な runtime 経路を無効化・置換する。Node、pnpm、network がない対象環境で配布アプリを確認する。
+
+独立した sidecar には target triple suffix を含む Tauri の [externalBin 規約](https://v2.tauri.app/develop/sidecar/)を使える。大きいプロジェクトは [bundle resources](https://v2.tauri.app/develop/resources/) として期待される構成を維持する。変更するデータは[書き込み可能ワークスペース](./writable-workspace.mdx)へコピーし、[所有プロセスのライフサイクル](./process-lifecycle.mdx)に従う。不完全な bundle を初回 install で修復しない。

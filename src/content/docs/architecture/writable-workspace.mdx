@@ -1,0 +1,44 @@
+---
+title: Writable Sidecar Workspace
+description: Copy immutable bundled resources into a versioned, crash-aware workspace before starting a sidecar
+sidebar_position: 6
+---
+
+## Separate Inputs from Outputs
+
+Treat the installed app bundle as immutable even if its filesystem permissions happen to allow writing. Writing `dist/`, caches or generated content inside `.app/Contents/Resources` can fail on read-only media or invalidate signing assumptions. Resolve bundled input through Tauri's [resource paths](https://v2.tauri.app/develop/resources/).
+
+| Context | Writable project root |
+| --- | --- |
+| Development checkout | A configured repo path, optionally derived from `env!("CARGO_MANIFEST_DIR")` |
+| Packaged application | An app-owned generation beneath `app.path().app_data_dir()?.join("app-workspace")` |
+
+`CARGO_MANIFEST_DIR` describes a build checkout, not an installed production path. Resolve roots once for the launch generation, create the data directory, and pass the chosen workspace to every sidecar and watcher. Do not overwrite user documents or settings when replacing generated workspace data.
+
+## Version the Staged Input
+
+At build time write a content-derived token for the staged tree: hash a deterministic ordering of relative paths, file bytes, symlink targets and relevant permissions, plus the staging script and configuration. Exclude the token file itself and transient outputs. A lockfile-only or `CARGO_PKG_VERSION`-only token misses changed assets/scripts or dependencies rebuilt under the same application version.
+
+At startup compare that expected token with a completed workspace generation. Directory existence alone is not readiness. A matching token allows reuse; a missing/mismatched token requires a new generation. Keep dependencies and static inputs separate from user-owned data so refresh cannot erase user changes.
+
+## Publish Only a Complete Generation
+
+Serialize workspace creation across concurrent app instances with an interprocess lock. Stop any writer using a generation before replacing or removing it.
+
+1. Copy the staged tree to a new temporary sibling under the app-owned workspace root. Never copy over the active tree in place.
+2. Preserve modes and recreate symlinks rather than recursively following them. Validate that packaged links resolve within the intended staged runtime and cannot escape into unrelated data.
+3. For a crash-durable contract, flush copied regular files and directory entries before recording completion. `File::sync_all()` on the sentinel alone does not flush the rest of the tree.
+4. Write the expected token to `.app-workspace-ready` last, sync the file and its parent directory, then publish the generation by a same-filesystem rename or an atomically replaced current-generation pointer. Sync the publication directory as well. Directory syncing and rename/replacement semantics need platform-specific handling.
+5. Start the sidecar only from a verified published generation. After interruption, discard only app-owned incomplete temporary generations; retain the previous complete generation until replacement succeeds.
+
+Rust's [File::sync_all](https://doc.rust-lang.org/std/fs/struct.File.html#method.sync_all) covers that file's content and metadata, not a recursive tree transaction. Test crash recovery and failure propagation; do not label a copy successful merely because a ready file can be read.
+
+## Copy Cost and macOS Clones
+
+On macOS, `cp -Rc source/. destination` can request clonefile copies on a supported filesystem. It is an optimization, not a correctness assumption. Check its exit status; discard its app-owned partial destination before retrying `cp -R` or a Rust recursive copy into a fresh temporary directory. Keep symlinks as links and preserve executable permissions on every path.
+
+Clones still cost per-file metadata operations, and support depends on filesystem/volume conditions. Measure the real staged tree instead of promising constant-time or zero-space copies. Prune build-only dependencies. See Apple's [copyfile source and clone flags](https://github.com/apple-oss-distributions/copyfile) and verify `man cp` on the supported macOS release.
+
+Measure staging/copy time separately from first-launch security assessment. Signing and notarization are distribution requirements, not a promise that every Gatekeeper-related launch cost disappears. Native macOS copy, signing and recovery checks cannot be established by a Linux documentation build.
+
+See [native sidecar binaries](./native-sidecar-binary.mdx) and the [doc viewer recipe](../recipes/doc-viewer-app.mdx).

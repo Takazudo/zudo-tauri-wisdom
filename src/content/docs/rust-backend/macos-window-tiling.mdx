@@ -62,7 +62,9 @@ pub fn create_menu(
     // ... build App, File, Edit, View menus ...
 
     // Window menu
-    let window_menu = Submenu::new(handle, "Window", true)?;
+    let window_menu = tauri::menu::SubmenuBuilder::with_id(
+        handle, tauri::menu::WINDOW_SUBMENU_ID, "Window",
+    ).build()?;
     window_menu.append(&PredefinedMenuItem::minimize(handle, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(handle, None)?)?;
     window_menu.append(&PredefinedMenuItem::separator(handle)?)?;
@@ -113,3 +115,9 @@ After building and installing the app:
 - [Tauri #13605](https://github.com/tauri-apps/tauri/issues/13605) — Downstream issue report
 - [muda #262](https://github.com/tauri-apps/muda/issues/262) — Sequoia tiling icons (separate, still open)
 - [winit #3986](https://github.com/rust-windowing/winit/issues/3986) — Same root cause in winit-based apps
+
+## Automatic Registration and Explicit Registration
+
+Use `WINDOW_SUBMENU_ID` for the canonical Window submenu. Tauri 2.11.0's `init_app_menu` finds that ID and registers it with AppKit automatically when installing the app menu. A translated label alone does not supply the ID. By contrast, calling `set_as_windows_menu_for_nsapp()` directly on a submenu registers that object; the explicit call does **not** require the reserved ID. The example keeps the canonical ID and the explicit post-install call, so both paths identify the same submenu.
+
+Source: [automatic ID lookup](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/app.rs), [direct submenu registration](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/menu/submenu.rs). A docs build cannot validate AppKit tiling; run the native checklist above.

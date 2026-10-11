@@ -1,0 +1,42 @@
+---
+title: Native Sidecar Without Runtime Node
+description: "Stage a target-specific native tool at build time and launch it without the user's Node or package manager"
+sidebar_position: 7
+---
+
+## Prefer a Self-Contained Runtime
+
+If the wrapped tool publishes a native platform binary, resolve and stage it at build time rather than requiring the user's Node and pnpm. This is a choice for tools that support it, not a claim that every npm CLI is native. Otherwise see [runtime Node detection](../rust-backend/node-detection.mdx).
+
+Run the locked install in the build/setup pipeline, for example from `beforeBuildCommand`, then stage only the tool's required runtime assets. Resolve the target from the release build target, not accidentally from the build machine's architecture. Cross-compiling can require explicitly installing another platform package.
+
+## Resolve the Actual Executable
+
+Inspect the installed tool's launcher and package metadata to find the native package and executable. A mapping might distinguish macOS arm64/x64, Linux GNU versus musl, and Windows MSVC plus `.exe`; unsupported targets must fail explicitly. Keep this mapping tested against the pinned launcher instead of treating a generic OS/architecture table as universal. Some tools require adjacent libraries or data files.
+
+Do not assume `node_modules/.bin/tool` is native. It can be a shell or JavaScript launcher with `#!/usr/bin/env node`, which reintroduces the Node dependency even when the platform binary is present. Validate the resolved binary before spawning:
+
+```rust
+fn validate_binary(path: &std::path::Path) -> std::io::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not executable"));
+        }
+    }
+    Ok(())
+}
+```
+
+Missing path, directory instead of file, and a lost Unix execute bit should produce distinct startup diagnostics. Mode bits are a useful preflight, not a guarantee: `spawn` can still fail because of architecture, signing, a noexec mount, missing libraries, or access controls. Preserve executable permissions and symlinks when staging/copying.
+
+## Check the Entire Runtime Chain
+
+A native launcher is not Node-free if it loads JS plugins through Node or shells out to JS configuration tools. Audit the selected tool/configuration and replace or disable those optional runtime paths only when supported by that tool. Validate the bundled app on a clean target machine without Node, pnpm or network access.
+
+Use Tauri's [externalBin convention](https://v2.tauri.app/develop/sidecar/) for independent sidecars, including its target-triple suffix. A larger served project can instead be staged through [bundle resources](https://v2.tauri.app/develop/resources/); preserve its expected layout. Copy mutable project data to a [writable workspace](./writable-workspace.mdx) and follow the [owned process lifecycle](./process-lifecycle.mdx). Do not run a first-launch package install to repair an incomplete bundle.

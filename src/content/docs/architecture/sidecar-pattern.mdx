@@ -4,6 +4,8 @@ description: Bundling and managing Node.js or other binaries as Tauri sidecar pr
 sidebar_position: 2
 ---
 
+For packaged applications, prefer a [native sidecar](./native-sidecar-binary.mdx), resolve a [writable workspace](./writable-workspace.mdx), and use the [owned lifecycle coordinator](./process-lifecycle.mdx). Bundled resources are immutable inputs; an occupied port is never permission to kill its listener.
+
 # Sidecar Pattern
 
 The sidecar pattern bundles a standalone binary (typically Node.js) inside the Tauri `.app` bundle. This makes the app self-contained -- it does not depend on tools installed on the user's system.

@@ -26,6 +26,12 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 let app_menu = SubmenuBuilder::new(app, "MyApp")
     .about(None)
     .separator()
+    .services()
+    .separator()
+    .hide()
+    .hide_others()
+    .show_all()
+    .separator()
     .quit()
     .build()?;
 
@@ -71,6 +77,14 @@ let menu = MenuBuilder::new(app)
 
 app.set_menu(menu)?;
 ```
+
+<Warning>
+
+On macOS, `app.set_menu()` replaces the application menu; it does not merge omitted standard items back in. Keep Services, Hide (⌘H), Hide Others (⌥⌘H), Show All and Quit. These predefined services/show-all entries have no effect on unsupported platforms. For larger menus, build from one ordered menu specification and test its required entries so shortcuts are not silently removed. Verify shortcuts natively on macOS.
+
+</Warning>
+
+See [Tauri 2.11.0 menu construction](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/menu/menu.rs) and [app menu replacement](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/app.rs).
 
 ### Explicit style (full control)
 
