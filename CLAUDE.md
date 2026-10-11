@@ -1,6 +1,6 @@
 # zudo-tauri-wisdom
 
-Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, Tailwind CSS v4).
+Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, zudo-react and zudo-wind).
 
 ## Commands
 

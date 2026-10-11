@@ -1,3 +1,6 @@
+# 6.0.0 reconciliation: route stubs adopt zudo-react and DocHistoryBoundary;
+# global.css adopts zudo-wind while preserving branding. setup-doc-skill.sh
+# is unchanged upstream since 5.28.1; its intentional local fork is retained.
 # Template drift allowlist for zudo-tauri-wisdom.
 # Generated projects start from create-zudo-doc templates; this file lists
 # intentional divergences from the pinned create-zudo-doc baseline so
