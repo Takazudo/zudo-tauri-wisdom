@@ -1,272 +1,138 @@
 ---
 title: ドキュメントビューアーアプリ
-description: パターン：pnpm 開発サーバーを薄くラップする軽量な Tauri アプリ
+description: ローカルドキュメントサーバーを安全に所有する Tauri ラッパー
 sidebar_position: 2
 ---
 
-# ドキュメントビューアーアプリ
-
-このレシピでは、ドキュメントサイトの開発サーバーをラップする軽量な Tauri アプリのアーキテクチャを解説する。Rust バックエンドが `pnpm dev` を起動し、サーバーの準備ができるまで待機し、ローカル URL に WebView をナビゲートする。Tauri アプリ自体にはフロントエンドフレームワークは使用せず、UI 全体はラップされた開発サーバーから提供される。
+ホストは所有するローカルサーバーを起動し、遷移先の準備ができるまで同梱ローディング画面を表示する。現在の起動世代の結果が受理されてから遷移する。[同梱ネイティブ sidecar](../architecture/native-sidecar-binary.mdx)を優先し、ユーザーの Node/pnpm 探索は実行時に JavaScript が必要なツールの代替手段とする。
 
 ## アーキテクチャ概要
 
 ```mermaid
-graph TD
-    A[Tauri アプリ起動] --> B{開発 or 本番？}
-    B -->|開発| C[beforeDevCommand が pnpm dev を起動]
-    B -->|本番| D[pnpm バイナリを検索]
-    D --> E[ポート上の古いプロセスを終了]
-    E --> F[pnpm dev をサイドカーとして起動]
-    C --> G[WebView にローディングページを表示]
-    F --> G
-    G --> H[サーバーの準備完了までポーリング]
-    H --> I[WebView をサーバー URL にナビゲート]
-    I --> J[アプリ使用可能]
-    J --> K[ウィンドウ閉じる時：サイドカーを終了]
+sequenceDiagram
+  participant UI
+  participant Coordinator
+  participant Worker
+  participant Sidecar
+  UI->>Coordinator: Launch / Retry
+  Coordinator->>Coordinator: Advance generation; take old resources
+  Coordinator->>Worker: Stop old group; prepare new resources
+  Worker->>Sidecar: Spawn owned process group on loopback
+  Worker->>Worker: Probe route, marker, module entries
+  Worker->>Coordinator: Publish generation + owned resources
+  alt Current generation and not shutting down
+    Coordinator->>UI: Navigate to effective URL
+  else Superseded or shutdown
+    Coordinator->>Worker: Dispose unpublished resources
+  end
 ```
 
 ## 2つのモード
 
-アプリは開発モードと本番モードで異なる動作をする。
-
-- **開発モード**（`cargo tauri dev`）：Tauri の `beforeDevCommand` が `pnpm dev` を起動する。Rust コードは WebView をサーバー URL に向けるだけである。
-- **本番モード**（`cargo tauri build`）：Rust コード自身が `pnpm` を見つけ、子プロセスとして起動し、準備完了を待ち、終了時にクリーンアップを行う。
-
-```rust
-const PORT: u16 = 32342;
-const DEFAULT_PATH: &str = "/";
-const IS_DEV: bool = cfg!(debug_assertions);
-const PNPM_CMD: &str = "dev";
-```
-
-## pnpm の検索
-
-本番モードでは、アプリはユーザーのシステム上で `pnpm` バイナリを見つける必要がある。GUI アプリはユーザーのシェル `PATH` を継承しないため、単に `pnpm` を呼び出すだけでは動作しない。
-
-戦略は、まずハードコードされた既知のパス（バージョンマネージャのシムを含む）を確認し、次に `which` にフォールバックすることである。
-
-```rust
-fn find_pnpm() -> Option<PathBuf> {
-    // Check well-known installation paths first
-    let home = std::env::var("HOME").ok()?;
-    let candidates = [
-        "/opt/homebrew/bin/pnpm".to_string(),  // Apple Silicon Homebrew
-        "/usr/local/bin/pnpm".to_string(),     // Intel Homebrew
-        format!("{home}/.volta/bin/pnpm"),     // Volta シム
-    ];
-    for p in &candidates {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    // Fallback: ask the system
-    if let Ok(output) = Command::new("/usr/bin/which").arg("pnpm").output() {
-        let path_str = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
-        if !path_str.is_empty() {
-            let path = PathBuf::from(&path_str);
-            if path.exists() {
-                return Some(path);
-            }
-        }
-    }
-
-    None
-}
-```
-
-<Note>
-
-GUI アプリのコンテキストでは `which` が信頼できない場合があるため、ハードコードされたパスを最初に確認する。`/usr/bin/which`（`which` だけではなく）を使用するのは、アプリの `PATH` に `/usr/bin` が含まれていない可能性があるためである。ユーザーが Volta で Node を pin しているケースが多い場合は `$HOME/.volta/bin/pnpm` もハードコードリストに含める -- Finder 起動は Volta のシム注入を見ない。
-
-</Note>
+開発時は `beforeDevCommand` が開発サーバーを所有する場合がある。ランタイムの終了処理でその外部所有プロセスを止めない。配布アプリはビルド時に依存関係を準備し、自分の sidecar を所有する。先に[書き込み可能なワークスペース](../architecture/writable-workspace.mdx)を解決する。同梱 Resources は入力であり生成先ではない。
 
 ## サイドカーの起動
 
-サイドカーは独自のプロセスグループで起動する。これはクリーンアップにとって極めて重要である。開発サーバーを終了する際には、親の `pnpm` プロセスだけでなく、プロセスグループ全体を終了させる必要がある（`pnpm` 自体が子プロセスを起動するため）。
-
-```rust
-struct Sidecar {
-    child: Child,
-    pid: u32,
-}
-
-fn spawn_sidecar(pnpm_path: &std::path::Path) -> Sidecar {
-    let dir = target_dir(); // The directory containing the project to serve
-
-    let mut cmd = Command::new(pnpm_path);
-    cmd.args([PNPM_CMD])
-        .current_dir(&dir)
-        .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(log_file_clone));
-
-    // Create a new process group so we can kill all child processes
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-
-    let child = cmd.spawn().expect("Failed to spawn pnpm sidecar");
-    let pid = child.id();
-
-    Sidecar { child, pid }
-}
-```
-
-<Warning>
-
-`process_group(0)` がないと、`pnpm` プロセスを終了しても、孤立した Node.js プロセスがポートにバインドされたまま残る。次回の起動時に、前回の実行から残ったゴーストプロセスによってポートが占有されているため、起動に失敗する。
-
-</Warning>
-
-## サイドカーの終了
-
-プロセスだけでなく、プロセスグループ（負の PID）を終了させる。
-
-```rust
-fn kill_sidecar(sidecar: &mut Sidecar) {
-    #[cfg(unix)]
-    {
-        if let Ok(pid) = i32::try_from(sidecar.pid) {
-            if pid > 0 {
-                // Negative PID signals the entire process group
-                unsafe { libc::kill(-pid, libc::SIGTERM) };
-            }
-        }
-    }
-
-    // Wait briefly for graceful shutdown
-    thread::sleep(Duration::from_millis(500));
-
-    // Escalate if still running
-    match sidecar.child.try_wait() {
-        Ok(Some(_)) => {
-            // Already exited
-        }
-        _ => {
-            let _ = sidecar.child.kill();   // SIGKILL
-            let _ = sidecar.child.wait();   // Reap
-        }
-    }
-}
-```
+[ライフサイクルコーディネーター](../architecture/process-lifecycle.mdx)を子プロセス、グループ、ウォッチャー、実際のポートの唯一の所有者にする。Unix では `process_group(0)` を使い、登録前に子の PGID を記録する。再起動を直列化し、Retry や終了後に返った古い結果は拒否してリソースを破棄する。標準出力・エラーはアプリが書けるログへ送る。
 
 ## 起動時のポートクリーンアップ
 
-新しいサーバーを起動する前に、すでにポートでリッスンしているプロセスを終了させる。これは、前のアプリインスタンスがクリーンアップせずにクラッシュした場合のケースを処理する。
-
-```rust
-fn kill_port() {
-    if let Ok(output) = Command::new("/usr/bin/lsof")
-        .args(["-ti", &format!(":{PORT}")])
-        .output()
-    {
-        let pids = String::from_utf8_lossy(&output.stdout);
-        for line in pids.trim().lines() {
-            if let Ok(pid) = line.trim().parse::<i32>() {
-                unsafe { libc::kill(pid, libc::SIGTERM) };
-            }
-        }
-        if !pids.trim().is_empty() {
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
-}
-```
+ポート所有者を終了する手順は不要。strict モードでは希望ポートの占有を報告し、明示的な fallback 方針だけが空きループバックポートを選ぶ。そのポートを spawn、確認、遷移、capability に一貫して渡す。事前 bind は競合するので、確認できた bind 競合だけを再試行する。`lsof` で見つけたサービスは終了しない。
 
 ## 準備完了ポーリング
 
-アプリはサーバー URL にポーリングし、エラーでない HTTP ステータスコードが返されるまで待機する。
+バックグラウンドワーカー内の HTTP クライアントを使う。次の例は proxy と redirect を無効にし、IPv4 loopback に限定し、大きすぎる応答を拒否する。実装では client を再利用できる。`reqwest` はアプリの明示的な依存であり、Tauri が提供するものではない。
 
 ```rust
-fn wait_for_ready(timeout: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        let code = Command::new("/usr/bin/curl")
-            .args([
-                "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                &format!("http://localhost:{PORT}/"),
-            ])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "err".to_string());
+// Cargo.toml: reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
+use std::{io::{self, Read}, time::Duration};
 
-        if code != "000" && code != "err" {
-            // Server is ready
-            thread::sleep(Duration::from_secs(1)); // Extra delay for stability
-            return;
-        }
-        thread::sleep(Duration::from_secs(1));
+fn probe_route(port: u16, path: &str) -> Result<(u16, String), Box<dyn std::error::Error>> {
+    if !path.starts_with('/') || path.starts_with("//") || path.contains(['\r', '\n']) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid route").into());
     }
-    // Timeout - proceed anyway and let the user see the error
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(200))
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    let response = client.get(format!("http://127.0.0.1:{port}{path}")).send()?;
+    let status = response.status().as_u16();
+    const LIMIT: u64 = 2 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    response.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "response too large").into());
+    }
+    Ok((status, String::from_utf8(bytes)?))
 }
 ```
 
-<Tip>
+HTTP 成功だけでは足りない。サーバーとホストの契約を定義する。
 
-`curl` だけではなく `/usr/bin/curl`（絶対パス）を使用すること。GUI アプリのコンテキストでは、シェルの `PATH` が設定されておらず、`curl` が見つからない場合がある。
+1. `/docs/` など実際の遷移先を取得し、200 を要求する。
+2. ホストが生成し今回のサーバーが出力する起動ごとのマーカーを要求する。古いビルドなら `StaleContent` にする。
+3. HTML パーサーで必要な `<script type="module" src>` を取り出し、ルート URL を基準に解決する。要求前に scheme、host、実際の port の一致を確認し、別 origin への redirect を拒否する。JavaScript 本体を全部取得せず 200 を確認する。island マーカーがあるのに期待する module がなければ待機する。
+4. `HttpUnavailable`、`StaleContent`、`Ready` を区別し、タイムアウト時に最後の状態を報告する。全体期限、リクエスト・アセット数の制限、各 asset 間のキャンセル確認を設ける。50 ms 間隔を出発点とし、tick ごとの `curl` プロセスや成功後の固定 sleep は使わない。
 
-</Tip>
+これは asset 契約の確認であり JavaScript 実行成功の証明ではない。hydration はブラウザで検証する。各 tick で子の死亡と世代も確認する。[ReadyResult](../architecture/process-lifecycle.mdx#準備完了ループでの-sidecar-の死亡検出) の `Superseded` は遷移も新しい UI の上書きもしない。
 
 ## ローディング画面
 
-ウィンドウはローディングページを表示した状態で即座に開かれ、サーバーの準備ができたらサーバー URL にナビゲートする。これにより、ビルドプロセス中にアプリがフリーズして見えることを回避する。
+同梱 `frontendDist` を背後に持つ `WebviewUrl::default()` で main を作る。timeout や子の終了でも画面を残し、ログパスと Retry を表示する。コーディネーターが受理した `Ready` だけが実際のルートへ遷移できる。待機関数から戻ったというだけで遷移しない。
+
+### DocumentStart の状態
+
+appearance などページの script より前に必要な状態には `initialization_script` を使い、ユーザーの文字列を直接埋め込まず JSON としてシリアライズする。
 
 ```rust
-// In setup()
-if IS_DEV {
-    // Dev mode: server is already running, point directly to it
-    let url: tauri::Url = server_url().parse().unwrap();
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-        .title("zmod doc")
-        .inner_size(1200.0, 800.0)
-        .build()?;
-} else {
-    // Production: show default (bundled) page first
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title("zmod doc")
-        .inner_size(1200.0, 800.0)
-        .build()?;
-
-    // Then navigate once server is ready (in background thread)
-    let handle = app.handle().clone();
-    thread::spawn(move || {
-        wait_for_ready(Duration::from_secs(120));
-        if let Some(w) = handle.get_webview_window("main") {
-            let url: tauri::Url = server_url().parse().unwrap();
-            let _ = w.navigate(url);
-        }
-    });
-}
+let initial_state = serde_json::to_string(&serde_json::json!({ "appearance": "dark" }))?;
+let init = format!("window.__APP_INITIAL_STATE__ = {initial_state};");
+let window = tauri::WebviewWindowBuilder::new(
+    app, "main", tauri::WebviewUrl::default(),
+)
+.initialization_script(init)
+.build()?;
 ```
 
-`tauri.conf.json` の `frontendDist` は、ローディングページのみを含む最小限のディレクトリを指す。
+ページの最初の script がこの値を消費できる。DocumentStart では `document.body` がない場合があるので依存しない。将来の navigation にも適用されるため秘密情報を入れず、遷移先を制限する。[Tauri の実装](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/webview/webview_window.rs)を参照。
+
+## ループバック capability と CSP
+
+`127.0.0.1` だけに bind する。特権を持つ Settings と loading はローカルに置き、別々の狭い capability にする。docs が event 監視だけを必要とする場合は次のようにする。
 
 ```json
 {
-  "build": {
-    "frontendDist": "./frontend"
+  "identifier": "docs-main",
+  "windows": ["main"],
+  "local": false,
+  "remote": { "urls": ["http://127.0.0.1:32342/*"] },
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
+```
+
+これは固定ポートの例であり、その実際のポートだけに有効。fallback 時は選んだ origin の runtime capability を遷移前に追加するか、remote IPC を無効のままにする。全ポート・全ウィンドウ許可へ置き換えない。複数の capability は合成されるので全体を調べる。独自 command には permission manifest と呼び出し元確認が必要で、plugin permission だけですべての登録 command が制限されるわけではない。
+
+同梱ページ用の出発点（設定へ統合し、名前を挙げた capability を用意する）:
+
+```json
+{
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'",
+      "capabilities": ["loading", "docs-main", "settings"]
+    }
   }
 }
 ```
 
-```html
-<!-- frontend/index.html -->
-<!DOCTYPE html>
-<html>
-<body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif">
-  <p>Loading...</p>
-</body>
-</html>
-```
+この方針では loading の JS/CSS は別の同梱ファイルに置く。必要な source だけを調整する。Tauri の設定 CSP が HTTP sidecar の応答に自動適用されるわけではない。remote document にはサーバーが CSP header を送り、必要な script/style/asset と、有効なら IPC endpoint だけを許可する。無関係な origin への遷移を拒否し、外部リンクは特権 webview の外で開く。[capability](https://v2.tauri.app/security/capabilities/)と [CSP](https://v2.tauri.app/security/csp/)を参照。
 
 ## ズームメニュー項目
 
-ドキュメントビューアーにはズームコントロールが有用である。アプリは現在のズームレベルを `AppState` に保存し、JavaScript のインジェクションを通じて適用する。
+ドキュメントビューアーにはズームコントロールが有用である。アプリは現在のズームレベルを `AppState` に保存し、`set_zoom` で WebView に適用する。
 
 ```rust
 struct AppState {
@@ -279,7 +145,7 @@ fn apply_zoom(app_handle: &AppHandle, level: f64) {
     let state = app_handle.state::<AppState>();
     *state.zoom.lock().unwrap() = level;
     if let Some(w) = app_handle.get_webview_window("main") {
-        let _ = w.eval(&format!("document.body.style.zoom = '{level}'"));
+        let _ = w.set_zoom(level);
     }
 }
 ```
@@ -325,181 +191,61 @@ app.on_menu_event(|app_handle, event| match event.id().as_ref() {
 });
 ```
 
+`document.body.style.zoom` は document 単位なので遷移でリセットされる。`WebviewWindow::set_zoom` はネイティブ API を使う。対象 backend で保持を確認し、必要なら page-load 完了時に保存値を再適用する。値を制限し、full navigation と新規 window の両方を確認する。[実装](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/webview/webview_window.rs)を参照。
+
 ## 終了時のプロセスクリーンアップ
 
-ウィンドウが破棄された時にサイドカーを終了させる。
+[終了経路と補助ウィンドウ](../architecture/process-lifecycle.mdx)に従う。Settings の close でアプリを終了しない。所有スロットを一度だけ take し、probe と watcher をキャンセルし、グループ全体を止めて後続の登録を防ぐ。メインウィンドウの close、アプリ quit、restart を対象 OS で別々に検証する。
+
+## sidecar でのコールドインストールブートストラップ
+
+配布ネイティブ sidecar は管理された setup/build で `pnpm install --frozen-lockfile` を行い、対象 binary と runtime asset を staging して、packaging 前に検証する。初回起動でネットワーク install を行わない。Node/pnpm もネットワークもない環境で配布物を試す。[ネイティブ sidecar](../architecture/native-sidecar-binary.mdx)の wrapper と plugin の注意点を参照。
+
+## 実行時 Node の代替経路
+
+本当に Node が必要なら、対応バージョンを文書化し、spawn 前に Node と pnpm を確認する。shim を見つけただけでは runtime が動く証明にならない。version probe の失敗を明示する。開発専用の cold install は opt-in にし、配布アプリが黙って依存を取得する設計にしない。
+
+## pnpm の検索
+
+本番モードでは、アプリはユーザーのシステム上で `pnpm` バイナリを見つける必要がある。GUI アプリはユーザーのシェル `PATH` を継承しないため、単に `pnpm` を呼び出すだけでは動作しない。
+
+戦略は、まずハードコードされた既知のパス（バージョンマネージャのシムを含む）を確認し、次に `which` にフォールバックすることである。
 
 ```rust
-.run(move |app_handle, event| match &event {
-    tauri::RunEvent::WindowEvent {
-        event: tauri::WindowEvent::Destroyed,
-        ..
-    } => {
-        if !IS_DEV {
-            if let Ok(mut g) = sidecar_for_exit.lock() {
-                if let Some(mut s) = g.take() {
-                    kill_sidecar(&mut s);
-                }
+fn find_pnpm() -> Option<PathBuf> {
+    // Check well-known installation paths first
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        "/opt/homebrew/bin/pnpm".to_string(),  // Apple Silicon Homebrew
+        "/usr/local/bin/pnpm".to_string(),     // Intel Homebrew
+        format!("{home}/.volta/bin/pnpm"),     // Volta shim
+    ];
+    for p in &candidates {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Fallback: ask the system
+    if let Ok(output) = Command::new("/usr/bin/which").arg("pnpm").output() {
+        let path_str = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_string();
+        if !path_str.is_empty() {
+            let path = PathBuf::from(&path_str);
+            if path.exists() {
+                return Some(path);
             }
         }
-        app_handle.exit(0);
     }
-    _ => {}
-});
+
+    None
+}
 ```
 
 <Note>
 
-`sidecar_for_exit` は、クロージャに移動する前に `AppState` からクローンされた `Arc<Mutex<Option<Sidecar>>>` である。`run()` クロージャはムーブキャプチャを行い、`setup()` クロージャよりも長く存続するため、これが必要となる。
+GUI アプリのコンテキストでは `which` が信頼できない場合があるため、ハードコードされたパスを最初に確認する。`/usr/bin/which`（`which` だけではなく）を使用するのは、アプリの `PATH` に `/usr/bin` が含まれていない可能性があるためである。ユーザーが Volta で Node を pin しているケースが多い場合は `$HOME/.volta/bin/pnpm` もハードコードリストに含める -- Finder 起動は Volta のシム注入を見ない。
 
 </Note>
-
-## sidecar でのコールドインストールブートストラップ
-
-バンドル sidecar 型のドキュメントビューアーは、`node_modules/` が埋まっていることに依存する。クリーンな clone 直後 -- またはユーザーがキャッシュディレクトリを消去した後 -- では `node_modules/astro/astro.js` が存在せず、sidecar は起動に失敗し、webview は永遠にローディングページのままになる。
-
-解決策は、sidecar 自身のエントリースクリプト内にプレビルドガードを入れることだ。エントリーポイントの欠損を検出し、先に `pnpm install` を走らせてから次に進む。無言で失敗する代わりに UX を「ビルド中」の状態に保つ。
-
-```js
-// doc/scripts/dev-stable.js
-import { existsSync } from "node:fs";
-import { spawn } from "node:child_process";
-import path from "node:path";
-
-const ROOT = path.resolve(import.meta.dirname, "..");
-
-function findPnpm() {
-  const candidates = [
-    "/opt/homebrew/bin/pnpm",
-    "/usr/local/bin/pnpm",
-    `${process.env.HOME}/.volta/bin/pnpm`,
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  // Fallback: /usr/bin/which
-  try {
-    const { execFileSync } = require("node:child_process");
-    const p = execFileSync("/usr/bin/which", ["pnpm"]).toString().trim();
-    return p && existsSync(p) ? p : null;
-  } catch {
-    return null;
-  }
-}
-
-async function ensureNodeModules(root = ROOT) {
-  // Fast path: astro.js が既にあればスキップ。
-  if (existsSync(path.join(root, "node_modules/astro/astro.js"))) return;
-
-  const pnpm = findPnpm();
-  if (!pnpm) {
-    console.error(
-      "pnpm not found — install Node.js and pnpm before launching.",
-    );
-    process.exit(1);
-  }
-
-  await new Promise((resolve, reject) => {
-    const child = spawn(pnpm, ["install", "--prefer-offline"], {
-      cwd: root,
-      stdio: "inherit", // ログは sidecar.log に流れる
-    });
-    child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`pnpm install exited with code ${code}`));
-    });
-  });
-}
-
-// Main
-try {
-  await serve(); // build() が終わるまで /___ready は 503
-  await ensureNodeModules();
-  await build();
-} catch (err) {
-  console.error("sidecar fatal:", err);
-  process.exit(1);
-}
-```
-
-間違えやすい勘所が 3 つある:
-
-1. **Finder / launchd の PATH は最小限。** Finder から起動された `.app` の内部では、`PATH` は典型的に `/usr/bin:/bin:/usr/sbin:/sbin` だけだ。ユーザーのシェル `PATH` に乗っている `pnpm` には届かない。絶対パスを先に探り、`/usr/bin/which pnpm` にフォールバックし、どちらも駄目なら明確なメッセージで終了する。[Rust 側の `find_pnpm()` 戦略](#pnpm-の検索)と同じ考え方だ。
-2. **インストール中もローディングページは有効のまま。** `pnpm install` が走っている間、sidecar の `/___ready` は 503 を返し続ける。Rust の準備完了ポーラーも sidecar 側の `LOADING_HTML` の自動リフレッシュも「まだビルド中」のスピナーを表示したまま -- インストール中の UX 劣化は起きない。インストールのログは `stdio: "inherit"` を通って sidecar ログに流れるので、エラー状態のローディングページが表示するファイルに残る。
-3. **pnpm 不在時の明確な停止。** `findPnpm()` が `null` を返したら、「pnpm not found」のメッセージを stderr に出して `process.exit(1)` する。そうすれば [`wait_for_ready` の sidecar 死亡検出器](../architecture/process-lifecycle.mdx#準備完了ループでの-sidecar-の死亡検出)が約 1 秒で `launch-error` 経由でユーザーに失敗を通知できる。無言でハングさせると UI はスピナーのまま固まる。
-
-<Tip>
-
-ファストパスの `existsSync(node_modules/astro/astro.js)` ショートサーキットは、起動ごとに `stat` を 1 回呼ぶだけのコストで保険になる。省略すると、何も変わっていないときでもフルの `pnpm install` が起動のたびに走り、ユーザーはスピナーの余分な 1〜2 秒に気付く。
-
-</Tip>
-
-### コールドパスのスモークテスト
-
-コールドインストールパスは `node_modules/` が空のときしか走らないため、テストしなければ無言で劣化する。`--cold` フラグを付けた最小の起動スクリプトで回帰の監視面を可視化する:
-
-```bash
-#!/usr/bin/env bash
-# test-launch.sh [--cold] [iterations]
-set -euo pipefail
-
-COLD=0
-ITERS=1
-for arg in "$@"; do
-  case "$arg" in
-    --cold) COLD=1 ;;
-    *) ITERS="$arg" ;;
-  esac
-done
-
-if [[ "$COLD" -eq 1 ]]; then
-  # イテレーション毎ではなく最初の 1 回前に 1 度だけ消す -- マルチラン時も
-  # コールドパスはちょうど 1 回だけ走り、残りは定常状態の再起動を測る。
-  rm -rf "./node_modules"
-fi
-
-for i in $(seq 1 "$ITERS"); do
-  open -W -a "MyApp.app"
-done
-```
-
-これで 1 回目のイテレーションで `ensureNodeModules` のブートストラップを走らせ、それ以降は健全な再起動を測る。CI（あるいは各リリース前）で回しておけば、フレッシュインストールのパスが気付かぬうちに壊れることはなくなる。
-
-## 設定ファイル
-
-対応する `tauri.conf.json` は以下の通りである。
-
-```json
-{
-  "productName": "zmod doc",
-  "version": "0.1.0",
-  "identifier": "com.takazudo.zmod-doc",
-  "build": {
-    "frontendDist": "./frontend",
-    "beforeDevCommand": "cd ../../doc && pnpm dev",
-    "devUrl": "http://localhost:32342/"
-  },
-  "app": {
-    "windows": [],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [],
-    "category": "DeveloperTool",
-    "macOS": {
-      "minimumSystemVersion": "10.15"
-    }
-  }
-}
-```
-
-ポイント：
-
-- **`windows: []`** -- ウィンドウは Rust でプログラム的に作成するため空
-- **`beforeDevCommand` で `cd` を使用** -- コマンドの CWD は設定ファイルのディレクトリではなくリポジトリルートであるため
-- **`frontendDist: "./frontend"`** -- 最小限のローディングページであり、実際のコンテンツではない
-- **`beforeBuildCommand` がない** -- 本番アプリは独自のサーバーを起動するため、静的アセットの埋め込みを行わない

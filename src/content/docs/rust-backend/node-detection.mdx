@@ -4,6 +4,8 @@ description: Finding system-installed Node.js at absolute paths, including versi
 sidebar_position: 7
 ---
 
+This page is the fallback when a runtime Node dependency cannot be avoided. First consider a [native bundled sidecar](../architecture/native-sidecar-binary.mdx), so distributed apps need neither the user's Node nor a first-launch package install.
+
 # Node Detection with Version Managers
 
 When a Tauri app is launched from Finder (not a terminal), macOS provides a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`). Version manager shims (nodenv, nvm, volta, fnm) are not on this PATH because they are configured in shell init files (`.zshrc`, `.bashrc`) that Finder does not source.

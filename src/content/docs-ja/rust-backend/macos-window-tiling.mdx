@@ -59,10 +59,12 @@ pub fn create_menu(
     let handle = app.handle();
     let menu = Menu::new(handle)?;
 
-    // ... App, File, Edit, View メニューを構築 ...
+    // ... build App, File, Edit, View menus ...
 
-    // Window メニュー
-    let window_menu = Submenu::new(handle, "Window", true)?;
+    // Window menu
+    let window_menu = tauri::menu::SubmenuBuilder::with_id(
+        handle, tauri::menu::WINDOW_SUBMENU_ID, "Window",
+    ).build()?;
     window_menu.append(&PredefinedMenuItem::minimize(handle, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(handle, None)?)?;
     window_menu.append(&PredefinedMenuItem::separator(handle)?)?;
@@ -74,13 +76,13 @@ pub fn create_menu(
     }
     menu.append(&window_menu)?;
 
-    // フルメニューと Window サブメニューの両方を返す
+    // Return both the full menu and the Window submenu
     Ok((menu, window_menu))
 }
 ```
 
 ```rust
-// main.rs — setup() 内
+// main.rs — inside setup()
 let (menu, window_menu) = native::menu::create_menu(app)?;
 app.set_menu(menu)?;
 
@@ -113,3 +115,9 @@ native::menu::register_menu_handler(app);
 - [Tauri #13605](https://github.com/tauri-apps/tauri/issues/13605) — 下流の issue 報告
 - [muda #262](https://github.com/tauri-apps/muda/issues/262) — Sequoia タイリングアイコン（別件、未解決）
 - [winit #3986](https://github.com/rust-windowing/winit/issues/3986) — winit ベースのアプリでの同じ根本原因
+
+## 自動登録と明示的な登録
+
+標準 Window submenu には `WINDOW_SUBMENU_ID` を使う。Tauri 2.11.0 の `init_app_menu` は app menu の導入時にこの ID を探して AppKit へ自動登録する。表示名を翻訳するだけでは ID は付かない。一方、submenu の `set_as_windows_menu_for_nsapp()` を直接呼べばその object が登録され、予約 ID は必須ではない。この例は標準 ID と導入後の明示呼び出しを残し、同じ submenu を指す。
+
+出典: [自動 ID 探索](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/app.rs)、[直接の submenu 登録](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/menu/submenu.rs)。docs build では AppKit tiling を検証できない。上記の native checklist を実行する。

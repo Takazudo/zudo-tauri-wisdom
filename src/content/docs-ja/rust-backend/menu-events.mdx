@@ -26,6 +26,12 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 let app_menu = SubmenuBuilder::new(app, "MyApp")
     .about(None)
     .separator()
+    .services()
+    .separator()
+    .hide()
+    .hide_others()
+    .show_all()
+    .separator()
     .quit()
     .build()?;
 
@@ -71,6 +77,14 @@ let menu = MenuBuilder::new(app)
 
 app.set_menu(menu)?;
 ```
+
+<Warning>
+
+macOS の `app.set_menu()` はアプリメニュー全体を置き換え、省略した標準項目を補わない。Services、Hide (⌘H)、Hide Others (⌥⌘H)、Show All、Quit を残す。これらの services/show-all 項目は未対応 platform では効果を持たない。大きいメニューは単一の順序付き仕様から作り、必須項目をテストして shortcut の欠落を防ぐ。shortcut は macOS 実機で確認する。
+
+</Warning>
+
+[Tauri 2.11.0 の menu 構築](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/menu/menu.rs)と [app menu 置換](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/app.rs)を参照。
 
 ### 明示的スタイル（完全な制御）
 

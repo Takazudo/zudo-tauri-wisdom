@@ -4,6 +4,8 @@ description: Node.jsなどのbinaryをTauri sidecarプロセスとしてバン�
 sidebar_position: 2
 ---
 
+配布アプリでは[ネイティブ sidecar](./native-sidecar-binary.mdx)、[書き込み可能 workspace](./writable-workspace.mdx)、[所有ライフサイクル管理](./process-lifecycle.mdx)を使う。同梱 resource は不変入力で、ポート占有はリスナーを終了する権限を意味しない。
+
 # sidecar パターン
 
 sidecar パターンは、スタンドアロン binary（通常は Node.js）を Tauri の `.app` bundle 内にバンドルする手法である。これによりアプリは自己完結し、ユーザーのシステムにインストールされたツールに依存しなくなる。

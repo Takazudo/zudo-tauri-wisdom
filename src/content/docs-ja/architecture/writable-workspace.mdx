@@ -1,0 +1,44 @@
+---
+title: 書き込み可能な sidecar ワークスペース
+description: 同梱の不変リソースを、世代管理と中断復旧を備えた領域へコピーしてから sidecar を起動する
+sidebar_position: 6
+---
+
+## 入力と出力を分ける
+
+ファイル権限上は書けても、インストール済み app bundle は不変として扱う。`.app/Contents/Resources` 内の `dist/`、cache、生成 content への書き込みは read-only media で失敗し、署名の前提も壊し得る。同梱入力は Tauri の [resource path](https://v2.tauri.app/develop/resources/)で解決する。
+
+| コンテキスト | 書き込み可能なプロジェクト root |
+| --- | --- |
+| 開発 checkout | 設定した repo path。必要なら `env!("CARGO_MANIFEST_DIR")` を基準にする |
+| 配布アプリ | `app.path().app_data_dir()?.join("app-workspace")` 以下のアプリ所有世代 |
+
+`CARGO_MANIFEST_DIR` はビルド時の checkout であり、インストール後の本番パスではない。起動世代ごとに root を一度解決し、data directory を作り、同じ workspace をすべての sidecar と watcher へ渡す。生成 workspace を更新する際にユーザー文書や設定を上書きしない。
+
+## staging 入力をバージョン管理する
+
+ビルド時に staged tree の内容から token を作る。相対パス、file bytes、symlink target、必要な permission を決定的な順序で hash し、staging script と設定も含める。token 自体と一時出力は除外する。lockfile や `CARGO_PKG_VERSION` だけでは、同じ app version で変わった asset/script/dependency を検知できない。
+
+起動時に期待 token と完成済み workspace 世代を比較する。ディレクトリの存在だけでは準備完了ではない。一致なら再利用し、欠落・不一致なら新世代を作る。依存・静的入力をユーザーデータと分離し、更新でユーザー変更を消さない。
+
+## 完成した世代だけを公開する
+
+複数インスタンス間の作成を interprocess lock で直列化する。使用中の世代を置換・削除する前に、その writer を停止する。
+
+1. staged tree をアプリ所有 root 内の新しい一時 sibling へコピーする。使用中の tree を直接上書きしない。
+2. mode を保持し、symlink を辿って再帰コピーせず link として再作成する。package 内の link が意図した runtime 内で解決され、無関係なデータへ逃げないことを確認する。
+3. crash durability が必要なら、完了を記録する前にコピーした通常ファイルと directory entry を flush する。sentinel だけの `File::sync_all()` は tree 全体を flush しない。
+4. 最後に `.app-workspace-ready` へ token を書き、file と親 directory を sync する。同一 filesystem の rename または current-generation pointer の atomic replacement で公開し、公開 directory も sync する。directory sync と rename/replacement の意味は platform ごとに扱う。
+5. 検証して公開した世代だけから sidecar を起動する。中断後はアプリ所有の未完成 temporary 世代だけを破棄し、新世代の成功まで以前の完成世代を残す。
+
+Rust の [File::sync_all](https://doc.rust-lang.org/std/fs/struct.File.html#method.sync_all) はその file の content/metadata を対象とし、再帰 tree transaction ではない。crash recovery とエラー伝播を検証し、ready file が読めるだけで成功扱いしない。
+
+## コピーコストと macOS clone
+
+macOS の `cp -Rc source/. destination` は対応 filesystem で clonefile copy を要求できる。正しさの前提ではなく最適化として扱う。終了コードを確認し、失敗したアプリ所有 temporary destination を破棄してから、新しい領域へ `cp -R` または Rust の再帰 copy を試す。すべての経路で symlink と実行権限を維持する。
+
+clone でも file ごとの metadata 処理が必要で、filesystem/volume 条件に依存する。一定時間・追加容量ゼロと約束せず実際の tree を測定し、build-only dependency を削減する。Apple の [copyfile 実装と clone flag](https://github.com/apple-oss-distributions/copyfile)を参照し、対象 macOS の `man cp` を確認する。
+
+staging/copy 時間と初回のセキュリティ評価時間を分けて測る。署名・公証は配布上の要件であり、Gatekeeper 関連のコストが必ず消える保証ではない。macOS の copy、署名、復旧は Linux の docs build では検証できない。
+
+[ネイティブ sidecar](./native-sidecar-binary.mdx)と[doc viewer レシピ](../recipes/doc-viewer-app.mdx)も参照。

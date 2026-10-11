@@ -4,6 +4,8 @@ description: Finder から起動されたアプリで、バージョンマネー
 sidebar_position: 7
 ---
 
+このページは実行時 Node 依存を避けられない場合の代替経路。まず[同梱ネイティブ sidecar](../architecture/native-sidecar-binary.mdx)を検討し、配布アプリでユーザーの Node や初回 package install を不要にする。
+
 # バージョンマネージャー対応の Node 検出
 
 Tauri アプリを Finder から起動すると、macOS は最小限の PATH（`/usr/bin:/bin:/usr/sbin:/sbin`）しか提供しません。バージョンマネージャーの shim（nodenv, nvm, volta, fnm）は `.zshrc` や `.bashrc` などのシェル初期化ファイルで設定されるため、Finder がこれらを source しない以上、PATH 上に存在しません。

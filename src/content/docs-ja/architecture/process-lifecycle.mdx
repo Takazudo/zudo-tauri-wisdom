@@ -1,466 +1,161 @@
 ---
 title: プロセスライフサイクル
-description: Tauri v2アプリにおけるポートのクリーンアップ、シグナル処理、プロセスグループ、クリーンシャットダウン
+description: 所有権を守るポート選択、世代管理付き起動、プロセスグループと Tauri v2 の終了処理
 sidebar_position: 4
 ---
 
-# プロセスライフサイクル
+ポートのリスナーが自分のアプリのプロセスとは限らない。この起動で生成した子プロセスとグループを記録し、再起動・準備確認・終了を単一のコーディネーターで管理する。
 
-プロセスライフサイクルの管理は、Tauri ラッパーアプリで最もエラーが起きやすい部分の1つである。ここを間違えると、ゾンビプロセス、ポートの占有、2回目の起動ができないアプリという事態に陥る。
+## ポート所有者を終了せずにポートを選ぶ
 
-このページでは、ライフサイクルの全体像を扱う: 起動前のポートクリーンアップ、sidecar の stdout/stderr 処理、クリーンシャットダウンのためのプロセスグループ設定、macOS のウィンドウ閉じ＝終了パターン、そしてグレースフルな kill シーケンスである。
-
-## 起動前に既存ポートをクリーンアップ
-
-新しい sidecar を起動する前に、ポートが空いていることを確認する必要がある。アプリの前回インスタンスがクラッシュし、プロセスがポートをリッスンしたまま残っている可能性がある:
+`lsof` で見つけた PID を、希望ポートの使用者という理由だけで終了してはいけない。strict モードでは使用中のポートを報告する。フォールバックを明示的に許可した場合だけ、カーネルに空いているループバックポートを選ばせる。
 
 ```rust
-fn kill_port() {
-    if let Ok(output) = Command::new("/usr/bin/lsof")
-        .args(["-ti", &format!(":{PORT}")])
-        .output()
-    {
-        let pids = String::from_utf8_lossy(&output.stdout);
-        for line in pids.trim().lines() {
-            if let Ok(pid) = line.trim().parse::<i32>() {
-                log(&format!(
-                    "kill_port: killing stale pid {pid} on port {PORT}"
-                ));
-                // SAFETY: pid は lsof から取得した有効なプロセス ID
-                unsafe { libc::kill(pid, libc::SIGTERM) };
-            }
+use std::{io, net::{Ipv4Addr, TcpListener}};
+
+fn choose_port(preferred: u16, strict: bool) -> io::Result<u16> {
+    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, preferred)) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse && !strict => {
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
         }
-        if !pids.trim().is_empty() {
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
-}
-```
-
-重要な点:
-
-- 絶対パスで `/usr/bin/lsof` を使用（開発・プロダクション両方で動作）
-- `-ti` で簡潔な出力（PID のみ、ヘッダなし）を指定のポートに対して取得
-- `SIGKILL`（強制）ではなく `SIGTERM`（グレースフル）を送信
-- プロセスが実際に終了するまで 500ms 待機
-- すべての `spawn_sidecar()` の前に呼び出す
-
-<Warning>
-
-sidecar を起動する前に必ず `kill_port()` を呼び出すこと。この手順を省略して古いプロセスがポートを保持していると、新しい sidecar はバインドに失敗するか別のポートにバインドし、アプリは接続できなくなる。
-
-</Warning>
-
-### kill_port() を呼び出すタイミング
-
-```rust
-fn main() {
-    let sidecar: Option<Sidecar> = if IS_DEV {
-        None
-    } else {
-        kill_port();  // 初回起動前にクリーンアップ
-        Some(spawn_sidecar(&pnpm_path))
+        Err(error) => return Err(error),
     };
-}
-
-fn do_refresh(app_handle: &AppHandle) {
-    // リフレッシュ時: 古い sidecar を kill → ポートをクリーンアップ → 新しい sidecar を起動
-    if let Some(mut old) = guard.take() {
-        kill_sidecar(&mut old);
-    }
-    kill_port();  // 再起動前にクリーンアップ
-    *guard = Some(spawn_sidecar(&pnpm_path));
+    Ok(listener.local_addr()?.port())
 }
 ```
 
-## sidecar の stdout/stderr リダイレクト
+これは予約ではなく事前確認であり、戻り時にリスナーを閉じる。その後 sidecar が bind するまでに別プロセスが取得する可能性がある。実際のポートを子プロセスと準備確認に渡し、子がそのポートだけに bind するようにする。bind 競合と特定できた場合だけ回数を制限して再試行する。任意の起動・設定エラーを再試行したり、strict モードのポートを黙って変更したりしない。リスナーを継承できるサーバーならこの競合を避けられる。
 
-sidecar の出力はどこかに送る必要がある。親の stdout/stderr を継承する方法は開発モードでは動作するが（ターミナルで確認できる）、プロダクションでは無意味である（ターミナルがない）。ログファイルにリダイレクトする:
+## 子プロセスとウォッチャーを所有する
 
-```rust
-fn spawn_sidecar(pnpm_path: &std::path::Path) -> Sidecar {
-    let sidecar_log_path = app_dir().join(".tauri-sidecar-log");
+起動・再試行・終了を単一のコーディネーターで直列化する。起動ごとに世代を進める。ワーカーは世代を保持し、状態ロックの外でリソースを準備して結果を返す。子プロセス、ウォッチャー、実際の URL を登録する直前に、世代と終了フラグを同時に確認する。ナビゲーションの許可も同じ直列化された判断で行う。atomic の読み取り後に別途 `navigate()` するだけでは競合が残る。
 
-    let log_file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)  // 起動ごとに新しいログ
-        .open(&sidecar_log_path)
-        .unwrap_or_else(|e| {
-            panic!("Failed to open sidecar log at {}: {e}",
-                sidecar_log_path.display());
-        });
-    let log_file_clone = log_file
-        .try_clone()
-        .expect("Failed to clone sidecar log file handle");
-
-    let mut cmd = Command::new(pnpm_path);
-    cmd.args(["dev"])
-        .current_dir(&target_dir)
-        .stdout(Stdio::from(log_file))       // stdout -> ログファイル
-        .stderr(Stdio::from(log_file_clone)); // stderr -> 同じログファイル
-
-    // ...起動処理
-}
-```
-
-<Note>
-
-`try_clone()` の呼び出しが必要なのは、`Stdio::from()` がファイルハンドルの所有権を取得するためである。stdout 用と stderr 用に2つの別々のハンドルが必要だが、それらは同じファイルを指す。
-
-</Note>
-
-### ログファイル戦略
-
-ここで使用しているパターンは:
-
-- **起動ごとにトランケート**（`write(true).truncate(true)`） -- ログファイルには現在のセッションの出力のみ含まれる
-- **アプリスコープのパス**（アプリディレクトリ内の `.tauri-sidecar-log`） -- デバッグ時に見つけやすい
-- **アプリログとは別管理** -- アプリ自体のログ（`.tauri-log`）はライフサイクルイベントを追跡し、sidecar ログは生の stdout/stderr をキャプチャする
+登録できなければ候補のプロセスグループとウォッチャーを即座に破棄する。終了時は先にコーディネーターを終端状態にし、`Option<OwnedResources>` を take する。それ以降ワーカーを登録させない。take により終了要求を冪等にできる。 プロセスの終了を許可する前に、起動中のすべてのワーカーをキャンセルして join/drain し、spawn 済みで未登録の候補も回収する。登録済みスロットだけの所有ではこの空白を保護できない。sidecar だけでなくウォッチャーと準備確認も停止する。`beforeDevCommand` が生成したプロセスはこのスロットの所有物ではなく、ランタイム側で終了してはいけない。
 
 ## クリーンシャットダウンのためのプロセスグループ
 
-これは最も重要なパターンの1つである。`pnpm dev` のような sidecar を起動すると、それ自身が子プロセス（Vite、esbuild など）を起動する。`pnpm` プロセスだけを kill しても、その子プロセスは孤児となりポートを保持し続ける。
-
-解決策は、sidecar を独自の**プロセスグループ**内で起動することである:
+Unix では専用グループを作り、spawn 直後に PGID を記録する。
 
 ```rust
-let mut cmd = Command::new(pnpm_path);
-cmd.args(["dev"])
-    .current_dir(&dir)
-    .stdout(Stdio::from(log_file))
-    .stderr(Stdio::from(log_file_clone));
-
 #[cfg(unix)]
-{
+fn spawn_owned(command: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
-    cmd.process_group(0);  // 新しいプロセスグループ、PGID = 子プロセスの PID
+    command.process_group(0).spawn()
 }
-
-let child = cmd.spawn().expect("Failed to spawn sidecar");
-let pid = child.id();
 ```
 
-`process_group(0)` は、子プロセスの PID をグループ ID とする新しいプロセスグループを作成するよう OS に指示する。この子プロセスが起動するすべてのプロセス（およびその子プロセス）は、このグループ ID を継承する。
+`process_group(0)` の初期 PGID は子の PID になる。子孫は通常継承するが、新しいセッションやグループを作れば対象外になる。Windows では Job Object など別のプロセスツリー管理が必要で、`Child::kill()` だけでは同等にならない。
 
-### なぜこれが重要か
+## すべての終了経路と補助ウィンドウ
 
-`process_group(0)` なしの場合:
+Settings などの補助ウィンドウを閉じてもサーバーを停止しない。製品の仕様が close-to-hide なら、その `CloseRequested` を抑止して非表示にする。閉じるとアプリを終了するラッパーでは、メインウィンドウの `Destroyed` だけを終了要求に結び付ける。Dock に残す製品は別の方針が必要になる。
 
-```
-Tauri アプリ (PID 100)
-  └── pnpm (PID 200)     <-- これは kill できる
-        └── vite (PID 300)  <-- これが孤児になる！
-              └── esbuild (PID 400)  <-- これも！
-```
+メインウィンドウの破棄、受理した `RunEvent::ExitRequested`、`RunEvent::Exit` を同じ冪等なクリーンアップ所有者へ渡す。`ExitRequested` ではバックグラウンド処理が終わるまで終了を抑止し、完了フラグ付きで再度終了を要求する。2回目は許可する。UI スレッド上でポーリングの sleep をしない。`Exit` にも時間制限付きの最終処理を用意するが、キャンセルした終了要求で実行中のアプリを壊さない。
 
-`process_group(0)` ありの場合:
-
-```
-Tauri アプリ (PID 100)
-  └── [プロセスグループ PGID=200]
-        ├── pnpm (PID 200)
-        ├── vite (PID 300)
-        └── esbuild (PID 400)
-
-kill(-200, SIGTERM) → すべてを kill できる
-```
-
-## macOS のウィンドウ閉じ＝終了パターン
-
-macOS では、最後のウィンドウを閉じてもデフォルトではアプリケーションが終了しない -- プロセスは Dock に残り続ける。ラッパーアプリでは、これは誤った動作である: ウィンドウが閉じられたら、sidecar を kill してアプリを終了すべきだ。
-
-```rust
-.build(tauri::generate_context!())
-.expect("error while building tauri application")
-.run(move |app_handle, event| match &event {
-    tauri::RunEvent::WindowEvent {
-        event: tauri::WindowEvent::Destroyed,
-        ..
-    } => {
-        // ウィンドウ閉じ時に sidecar を kill
-        if !IS_DEV {
-            if let Ok(mut g) = sidecar_for_exit.lock() {
-                if let Some(mut s) = g.take() {
-                    kill_sidecar(&mut s);
-                }
-            }
-        }
-        // アプリを強制終了
-        app_handle.exit(0);
-    }
-    _ => {}
-});
-```
-
-<Warning>
-
-`app_handle.exit(0)` を忘れると、ウィンドウが閉じられた後も Rust プロセスは動作し続ける。sidecar も（kill を忘れた場合）動作し続ける。ユーザーにはウィンドウのない Dock アイコンが見え、なぜポートがまだ占有されているのか疑問に思うことになる。
-
-</Warning>
-
-### sidecar_for_exit パターン
-
-sidecar の状態は `.run()` クロージャからアクセスできる必要があるが、これは `.setup()` クロージャとは別のスコープである。パターンとしては、アプリのビルド前に `Arc<Mutex<>>` をクローンする:
-
-```rust
-let app_state = AppState {
-    sidecar: Arc::new(Mutex::new(sidecar)),
-    pnpm_path: found_pnpm,
-    zoom: Mutex::new(1.0),
-};
-
-// app_state を .manage() にムーブする前に Arc をクローン
-let sidecar_for_exit = app_state.sidecar.clone();
-
-tauri::Builder::default()
-    .manage(app_state)  // app_state はここでムーブされる
-    .setup(|app| { /* ... */ })
-    .build(tauri::generate_context!())
-    .run(move |app_handle, event| {
-        // sidecar_for_exit はここからアクセス可能
-        // ...
-    });
-```
+macOS の ⌘Q、Dock Quit、Apple event はネイティブ環境で検証する。必ず先にウィンドウ破棄イベントが届くとは仮定しない。Unix の `libc::atexit` は通常のネイティブ終了への補助になるが、SIGKILL、`_exit`、すべてのクラッシュには対応しない。PID 探索、ロック、メモリ確保、Tauri API を避け、事前に所有した PGID だけを扱う。atomic の終端値だけでは不十分で、spawn・登録・終了を協調させる。終了後に登録を拒否されたワーカーは、新しいグループを直ちに停止する。グループ消滅後は保存した PGID を消し、PID 再利用で他プロセスを対象にしない。
 
 ## sidecar の kill シーケンス
 
-kill シーケンスは2段階のアプローチをとる: まずグレースフルシャットダウンを試み、必要なら強制 kill する。
+リーダーを回収しても子孫の終了は保証されない。所有グループへ SIGTERM を送り、`try_wait()` で直接の子を回収しながら、期限までグループの存在を確認する。必要なら `child.kill()` だけでなくグループに SIGKILL を送る。ESRCH 以外のエラーはログに残す。
 
 ```rust
-fn kill_sidecar(sidecar: &mut Sidecar) {
-    log(&format!("kill_sidecar: pid={}", sidecar.pid));
+#[cfg(unix)]
+fn group_exists(pgid: i32) -> std::io::Result<bool> {
+    if pgid <= 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid PGID"));
+    }
+    if unsafe { libc::kill(-pgid, 0) } == 0 { return Ok(true); }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(error),
+    }
+}
 
-    // フェーズ1: プロセスグループ全体に SIGTERM
-    #[cfg(unix)]
-    {
-        if let Ok(pid) = i32::try_from(sidecar.pid) {
-            if pid > 0 {
-                // 負の PID でプロセスグループ全体にシグナルを送る
-                // SAFETY: pid は有効な子プロセス ID
-                unsafe { libc::kill(-pid, libc::SIGTERM) };
-            }
+#[cfg(unix)]
+fn signal_group(pgid: i32, signal: i32) -> std::io::Result<()> {
+    if pgid <= 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid PGID"));
+    }
+    if unsafe { libc::kill(-pgid, signal) } == 0 { return Ok(()); }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) { Ok(()) } else { Err(error) }
+}
+
+// Only accept a PGID saved immediately after this app's process_group(0) spawn.
+#[cfg(unix)]
+fn stop_owned_group(child: &mut std::process::Child, pgid: i32) -> std::io::Result<()> {
+    use std::time::{Duration, Instant};
+    for (signal, grace) in [(libc::SIGTERM, 500), (libc::SIGKILL, 500)] {
+        signal_group(pgid, signal)?;
+        let deadline = Instant::now() + Duration::from_millis(grace);
+        loop {
+            child.try_wait()?; // Reap our direct child; this is not group completion.
+            if !group_exists(pgid)? { return Ok(()); }
+            if Instant::now() >= deadline { break; }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
-
-    // グレースフルシャットダウンを待つ
-    thread::sleep(Duration::from_millis(500));
-
-    // フェーズ2: 終了を確認し、まだなら強制 kill
-    match sidecar.child.try_wait() {
-        Ok(Some(_)) => {
-            log("kill_sidecar: process already exited");
-        }
-        _ => {
-            log("kill_sidecar: escalating to SIGKILL");
-            let _ = sidecar.child.kill();  // SIGKILL
-            let _ = sidecar.child.wait();  // ゾンビプロセスの回収
-        }
-    }
+    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "process group still present"))
 }
 ```
 
-### 2段階プロセスの解説
-
-```mermaid
-sequenceDiagram
-  participant App as Tauri アプリ
-  participant PG as プロセスグループ
-  participant Child as 子プロセス
-
-  App->>PG: kill(-pid, SIGTERM)
-  Note over PG: グループ内のすべてのプロセスが<br/>SIGTERM を受信
-  App->>App: sleep(500ms)
-  App->>Child: try_wait()
-
-  alt プロセスが終了済み
-    Child-->>App: Ok(Some(status))
-    Note over App: クリーンに終了、完了
-  else プロセスがまだ実行中
-    Child-->>App: Ok(None) または Err
-    App->>Child: kill() [SIGKILL]
-    App->>Child: wait() [ゾンビ回収]
-    Note over App: 強制終了、完了
-  end
-```
-
-重要なポイント:
-
-1. **`-pid`（負の値）への SIGTERM** はトップレベルのプロセスだけでなくプロセスグループ全体を対象とする
-2. **500ms の待機**はプロセスにクリーンアップ（バッファのフラッシュ、コネクションの切断）の時間を与える
-3. **`try_wait()`** はブロックせずにプロセスの終了を確認する
-4. **`kill()` の後に `wait()`** -- `kill()` が SIGKILL を送り、`wait()` がゾンビプロセスを回収してリソースリークを防ぐ
-
-<Tip>
-
-`kill()` の後の `wait()` 呼び出しは不可欠である。これがないと、kill されたプロセスはゾンビとなる -- もう実行されないが、親がリープするまでプロセステーブルにエントリが残り続ける。
-
-</Tip>
+この時間制限付きヘルパーはワーカーで実行する。プロセスの探索・引き取り、グループから離脱した子孫の停止、応答しない子の無期限の回収は行わない。失敗した終了状態を診断・回収用に保持し、タイムアウトを成功扱いしない。signal 0 の存在確認は権限エラーも存在として扱い、子孫がゾンビ状態でも続くことがある。
 
 ## 完全なライフサイクルシーケンス
 
-アプリの起動から終了までの全ライフサイクルは以下のとおりである:
-
 ```mermaid
 sequenceDiagram
-  participant User as ユーザー
-  participant Rust as Rust メイン
-  participant Port as ポート (lsof)
+  participant UI
+  participant Coordinator
+  participant Worker
   participant Sidecar
-  participant Window as WebView
-
-  User->>Rust: アプリを起動
-
-  Note over Rust: プロダクションモードのみ
-  Rust->>Port: kill_port() - 既存プロセスの確認
-  Port-->>Rust: ポート上の PID（あれば）
-  Rust->>Port: 既存 PID に SIGTERM
-
-  Rust->>Sidecar: spawn_sidecar()
-  Note over Sidecar: process_group(0)<br/>stdout/stderr -> ログファイル
-
-  Rust->>Window: ローディングページで生成
-  Window-->>User: ローディングスピナーが表示
-
-  Rust->>Rust: バックグラウンドスレッドがポーリング
-
-  Sidecar-->>Rust: サーバー準備完了 (HTTP 200)
-  Rust->>Window: navigate(server_url)
-  Window-->>User: 実際のコンテンツ
-
-  Note over User: ユーザーがウィンドウを閉じる
-  User->>Window: 閉じる
-  Window->>Rust: WindowEvent::Destroyed
-
-  Rust->>Sidecar: kill(-pid, SIGTERM)
-  Rust->>Rust: sleep(500ms)
-  Rust->>Sidecar: try_wait / kill / wait
-  Rust->>Rust: app_handle.exit(0)
+  UI->>Coordinator: Launch / Retry
+  Coordinator->>Coordinator: Advance generation; take old resources
+  Coordinator->>Worker: Stop old group; prepare new resources
+  Worker->>Sidecar: Spawn owned process group on loopback
+  Worker->>Worker: Probe route, marker, module entries
+  Worker->>Coordinator: Publish generation + owned resources
+  alt Current generation and not shutting down
+    Coordinator->>UI: Navigate to effective URL
+  else Superseded or shutdown
+    Coordinator->>Worker: Dispose unpublished resources
+  end
 ```
 
 ## 準備完了ループでの sidecar の死亡検出
 
-素朴な準備完了ループは `/___ready` をポーリングし、`Ready` を返すかタイムアウトで諦めるだけである。sidecar が健全なときはそれで動くが、sidecar がすでに死んでいる場合 -- 典型的には初回起動時に `node_modules/` が存在しないケース -- タイムアウト時間をフルに消費してしまう。ユーザーは 120 秒間ローディングページを見せられ、その後アプリは死んだポートにナビゲートする。
-
-解決策は、子プロセスがすでに終了している場合に `wait_for_ready` が短絡的に抜けられるようにすることだ。sidecar ハンドルを渡し、各ポーリング毎に `Child::try_wait()` を呼ぶ:
+ワーカーは各 tick でキャンセル・世代と `Child::try_wait()` を確認し、ネットワーク I/O 中は mutex を保持しない。所有する子がない場合や終了中は起動をキャンセルし、子が終了していれば終了コードを返す。起動結果と HTTP 確認結果を分ける。
 
 ```rust
 pub enum ReadyResult {
     Ready,
     Timeout,
+    Superseded,
     SidecarExited { code: Option<i32> },
 }
 
-pub fn wait_for_ready(
-    sidecar: &Arc<Mutex<Option<Sidecar>>>,
-    timeout: Duration,
-) -> ReadyResult {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        // ロックは狭いスコープで取得する -- curl 呼び出しをまたいで保持してはならない。
-        if let Ok(mut guard) = sidecar.lock() {
-            if let Some(s) = guard.as_mut() {
-                match s.child.try_wait() {
-                    Ok(Some(status)) => {
-                        return ReadyResult::SidecarExited {
-                            code: status.code(),
-                        };
-                    }
-                    Ok(None) => {} // まだ実行中
-                    Err(e) => log(&format!("try_wait error: {e}")),
-                }
-            }
-        }
-
-        let code = check_ready();
-        if code != "000" && code != "err" {
-            thread::sleep(Duration::from_secs(1));
-            return ReadyResult::Ready;
-        }
-        thread::sleep(Duration::from_secs(1));
-    }
-    ReadyResult::Timeout
+pub enum ProbeState {
+    HttpUnavailable,
+    StaleContent,
+    Ready,
 }
 ```
 
-押さえるべき点は 3 つある:
+実際の遷移先を取得し、HTTP 200、今回の起動マーカー、ページに必要な同一オリジンの module エントリーを確認する。古いマーカーは準備完了ではない。[レシピの準備確認契約](../recipes/doc-viewer-app.mdx#準備完了ポーリング)を参照。50 ms 間隔は出発点にすぎず、各リクエストと起動全体に期限を設ける。最後に「安定待ち」の sleep を足さない。
 
-- **`try_wait()` は軽い。** `waitpid(WNOHANG)` 1 回分のシステムコールで、子プロセスが走っている間は `Ok(None)` を、終了した時点で `Ok(Some(status))` を返す。1 Hz のポーリングで呼んでも問題ない。
-- **ミューテックスのロックは狭いスコープで。** ロック取得 → `try_wait()` → `curl` を実行する前にガードを破棄する。ネットワーク呼び出しをまたいでガードを保持してしまうと、同じミューテックスを必要とするリフレッシュや終了などのパスをブロックする。
-- **両方の呼び出し元で `ReadyResult` を分岐処理する。** `setup()` の初回起動と `do_refresh()` のどちらも enum を消費し、死んだポートへナビゲートする代わりに `launch-error` イベントを発火する。フロントエンド側は[ローディング画面 → エラー状態とリトライ](./loading-screen.mdx#エラー状態とリトライ)を参照。
-
-<Warning>
-
-`curl` の呼び出しをまたいで `Mutex<Option<Sidecar>>` のガードを保持してはならない。ロックを握ったままの 1 秒の curl は、同じミューテックスに触れる必要があるリフレッシュやリトライ、ウィンドウクローズのイベントをすべて止めるのに十分な時間である。ガードは `try_wait()` の読み取りだけをカバーするスコープにする。
-
-</Warning>
-
-### launch-error イベントの発火
-
-`wait_for_ready` が `Timeout` または `SidecarExited` を返したら、死んだ URL へナビゲートする代わりに Tauri イベントを発火する。ローディングページがそれをリスンし、エラー状態に切り替わる（loading-screen.mdx 参照）。
-
-```rust
-use tauri::{AppHandle, Emitter, Manager};
-
-fn emit_launch_error(app_handle: &AppHandle, reason: &str) {
-    if let Some(w) = app_handle.get_webview_window("main") {
-        let _ = w.emit(
-            "launch-error",
-            serde_json::json!({
-                "reason": reason,
-                "logPath": sidecar_log_path().to_string_lossy(),
-            }),
-        );
-    }
-}
-
-// setup() / do_refresh() 内:
-match wait_for_ready(&state.sidecar, Duration::from_secs(120)) {
-    ReadyResult::Ready => {
-        let _ = w.navigate(server_url().parse().unwrap());
-    }
-    ReadyResult::Timeout => emit_launch_error(&handle, "timeout"),
-    ReadyResult::SidecarExited { .. } => {
-        emit_launch_error(&handle, "sidecar_exited");
-    }
-}
-```
-
-<Tip>
-
-`tauri::Emitter` は v2 のトレイトで、`AppHandle` と `WebviewWindow` の両方に `.emit()` を追加する。アプリハンドルからではなくウィンドウから emit することで、そのウィンドウのフロントエンドリスナーに狙って届けられる。
-
-`serde_json` は `tauri` 経由で推移的に入ってくるので、`dev-dependencies` から `dependencies` に昇格させてもコンパイル時間は変わらない。カスタム構造体を定義する代わりに `serde_json::json!` でペイロードを組み立てられるようになる。
-
-</Tip>
+`Ready` でも世代確認付きの登録を経てから遷移する。`Timeout` と `SidecarExited` はログパスとともに[ローディング画面のエラー表示](./loading-screen.mdx)へ渡す。`Superseded` は遷移せず、新しい起動にエラーを上書きしない。
 
 ## ロギング
 
-アプリ自体のライフサイクルイベントと sidecar の出力は、別々のファイルに記録すべきである:
+アプリが書き込めるログディレクトリで、ライフサイクル判断と sidecar の stdout/stderr を分ける。`log_file.try_clone()?` で2つ目のハンドルを作り、それぞれ `Stdio::from` へ渡す。sidecar ログは起動ごとにローテーションまたは切り詰め、ライフサイクルログの保存量も制限する。世代、実際のポート、所有 PGID、終了コード、シグナルエラー、最後の準備確認分類を記録する。
 
-```rust
-fn log(msg: &str) {
-    use std::io::Write;
-    let path = app_dir().join(".tauri-log");
-    if let Ok(mut f) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)  // トランケートではなく追記
-        .open(&path)
-    {
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let _ = writeln!(f, "[{secs}] {msg}");
-    }
-}
-```
+## 検証と出典
 
-これにより、デバッグ用に2つのログファイルが得られる:
+別プロセスが使うポート、strict と fallback、連続 Retry、spawn 中の終了、補助ウィンドウの close、リーダーより長く生存する子孫、再起動を検証する。macOS では ⌘Q、Dock Quit、Apple event も試す。ドキュメントのビルドや Linux テストではこれらを検証できない。
 
-| ファイル | 内容 |
-|------|----------|
-| `.tauri-log` | アプリライフサイクルイベント（起動、kill、準備完了、タイムアウト） |
-| `.tauri-sidecar-log` | sidecar の生の stdout/stderr |
-
-アプリログは `append(true)` で起動をまたいで蓄積する（間欠的な問題のデバッグに有用）。sidecar ログは `truncate(true)` で現在のセッションの出力のみを保持する。
+- [Rust CommandExt::process_group](https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#method.process_group)
+- [Tauri 2.11.0 の RunEvent と exit 実装](https://github.com/tauri-apps/tauri/blob/tauri-v2.11.0/crates/tauri/src/app.rs)
+- [POSIX kill の仕様](https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html)
