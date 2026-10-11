@@ -14,6 +14,24 @@ Run the locked install in the build/setup pipeline, for example from `beforeBuil
 
 Inspect the installed tool's launcher and package metadata to find the native package and executable. A mapping might distinguish macOS arm64/x64, Linux GNU versus musl, and Windows MSVC plus `.exe`; unsupported targets must fail explicitly. Keep this mapping tested against the pinned launcher instead of treating a generic OS/architecture table as universal. Some tools require adjacent libraries or data files.
 
+### Illustrative Target-to-Package Mapping
+
+The package names and executable paths below are **hypothetical placeholders**, not packages to install or a claim that a particular tool publishes these targets. Replace each row with the pinned tool launcher's actual mapping. The first column uses [Rust target triples](https://doc.rust-lang.org/rustc/platform-support.html); package naming is the publisher's own convention.
+
+| Release target | Hypothetical platform package | Executable within that package |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | `@scope/tool-darwin-arm64` | `tool` |
+| `x86_64-apple-darwin` | `@scope/tool-darwin-x64` | `tool` |
+| `aarch64-unknown-linux-gnu` | `@scope/tool-linux-arm64-gnu` | `tool` |
+| `x86_64-unknown-linux-gnu` | `@scope/tool-linux-x64-gnu` | `tool` |
+| `aarch64-unknown-linux-musl` | `@scope/tool-linux-arm64-musl` | `tool` |
+| `x86_64-unknown-linux-musl` | `@scope/tool-linux-x64-musl` | `tool` |
+| `x86_64-pc-windows-msvc` | `@scope/tool-win32-x64-msvc` | `tool.exe` |
+
+For this example, the staged executable is `node_modules/<platform-package>/tool` (or `tool.exe`); a real package may put it in a different directory. Resolve through the package's installed layout, including pnpm symlinks, rather than constructing a `.bin` wrapper path.
+
+Select by the **release target**, including ABI/libc, not the machine running the staging script. A macOS arm64 build host packaging an x64 release selects the x64 row. Linux GNU and musl are separate choices even with the same CPU architecture. A target absent from the verified mapping must fail staging with an unsupported-target error; never fall back to the host binary or another ABI. Check that the selected package/version is actually installed and validate its executable before packaging.
+
 Do not assume `node_modules/.bin/tool` is native. It can be a shell or JavaScript launcher with `#!/usr/bin/env node`, which reintroduces the Node dependency even when the platform binary is present. Validate the resolved binary before spawning:
 
 ```rust
