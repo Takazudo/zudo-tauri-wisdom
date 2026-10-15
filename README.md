@@ -6,6 +6,8 @@ Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, zudo-react a
 
 ## Commands
 
+Use Node.js 24 (`>=24 <25`) and the pnpm version pinned in `package.json`.
+
 ```bash
 pnpm dev              # Start zfb dev server (port 4321)
 pnpm build            # Build static site via zfb build
@@ -19,14 +21,11 @@ pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 ## Project Layout
 
 ```
-pages/          # Host-app routing layer (zfb entry points)
+pages/          # Package home route and EN/JA doc stubs with DocHistoryBoundary
 src/
-  components/   # Shared UI components
-  config/       # settings.ts — site-wide config
   content/      # MDX doc pages (docs/ + docs-ja/)
-  utils/        # Shared utilities
-plugins/        # zfb integration plugins (.mjs)
-zfb.config.ts   # Build config (framework, collections, plugins, adapter)
+  styles/       # Package CSS imports and host typography overrides
+zfb.config.ts   # Single zudoDoc() configuration (identity, features, nav, adapter)
 ```
 
 ## Content Structure
@@ -41,7 +40,7 @@ zfb.config.ts   # Build config (framework, collections, plugins, adapter)
 
 ## Content Categories
 
-Top-level directories under `src/content/docs/`. Directories with header nav entries are mapped via `categoryMatch` in `src/config/settings.ts`:
+Top-level directories under `src/content/docs/`. Directories with header nav entries are mapped via `categoryMatch` in `zfb.config.ts`:
 
 - `getting-started/` - Overview, project setup, dev vs production mode
 - `architecture/` - Sidecar pattern, loading screen, process lifecycle

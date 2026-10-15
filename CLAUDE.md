@@ -4,6 +4,8 @@ Takazudo's Tauri v2 dev notes, built with zudo-doc (zfb stack, MDX, zudo-react a
 
 ## Commands
 
+Use Node.js 24 (`>=24 <25`) and the pnpm version pinned in `package.json`.
+
 ```bash
 pnpm dev              # Start dev: zfb dev server (port 4321) + doc-history-server (4322), via run-p
 pnpm build            # Build static site via zfb build
@@ -20,9 +22,9 @@ pnpm b4push           # Pre-push validation (format + drift + pins + typecheck +
 pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 ```
 
-> zudo-doc 4.x note: doc-history now runs as a separate process (`dev:history`),
+> zudo-doc 7.x note: doc-history now runs as a separate process (`dev:history`),
 > so `pnpm dev` uses `run-p` to launch it alongside `zfb dev`. z-index tokens are
-> package-owned in 4.x, so the old `gen:z-index` / `check:z-index` scripts are gone.
+> package-owned in 7.x, so the old `gen:z-index` / `check:z-index` scripts are gone.
 
 ## Content Structure
 
@@ -59,7 +61,7 @@ All documentation files use `.mdx` format with YAML frontmatter.
 
 ### Frontmatter Fields
 
-The whole site is configured through a single `zudoDoc({...})` call in `zfb.config.ts` (zudo-doc 4.x single-entry config API). The frontmatter schema and content collections are package-owned defaults (`@takazudo/zudo-doc`) — there is NO `src/config/docs-schema.ts` and NO `src/content.config.ts`. To override the schema, pass `buildDocsSchema` to `zudoDoc()`.
+The whole site is configured through a single `zudoDoc({...})` call in `zfb.config.ts` (zudo-doc 7.x single-entry config API). The frontmatter schema and content collections are package-owned defaults (`@takazudo/zudo-doc`) — there is NO `src/config/docs-schema.ts` and NO `src/content.config.ts`. To override the schema, pass `buildDocsSchema` to `zudoDoc()`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -241,14 +243,14 @@ The `tauri-wisdom` skill (`.claude/skills/tauri-wisdom/SKILL.md`) is **generated
 
 ## Project Layout
 
-In zudo-doc 4.x the host surface collapsed into the `@takazudo/zudo-doc`
+The zudo-doc 7.x host surface is provided by the `@takazudo/zudo-doc`
 package (config API, components, utils, types, route helpers, design tokens are
 all package-owned). The project ships only a thin shell:
 
 ```
 pages/                    # 3 route stubs only (rest injected by the package)
   index.tsx               #   1-line re-export of the package home route
-  docs/[[...slug]].tsx    #   self-contained doc-route stub (dev-mode 404 fix)
+  docs/[[...slug]].tsx    #   self-contained doc-route stub with DocHistoryBoundary
   [locale]/docs/[[...slug]].tsx  # locale-prefixed counterpart (i18n)
 src/
   content/                # MDX doc pages (docs/ + docs-ja/) — the actual content
@@ -263,7 +265,7 @@ scripts/                  # host check/gen scripts (drift, pins, links, doc-skil
 - Base path: `/` (root — no subpath prefix)
 - Live URL: `https://zudo-tauri-wisdom.takazudomodular.com/`
 - Config: `zfb.config.ts` — the entire site config is one `zudoDoc({...})` call
-  (`@takazudo/zudo-doc/config`); there is no `src/config/settings.ts` in 4.x
+  (`@takazudo/zudo-doc/config`); there is no `src/config/settings.ts` in 7.x
 
 ## CI/CD
 
