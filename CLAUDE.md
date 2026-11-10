@@ -22,9 +22,10 @@ pnpm b4push           # Pre-push validation (format + drift + pins + typecheck +
 pnpm setup:doc-skill  # Generate tauri-wisdom skill + symlink all skills
 ```
 
-> zudo-doc 7.x note: doc-history now runs as a separate process (`dev:history`),
+> zudo-doc 10 note: doc-history runs as a separate process (`dev:history`),
 > so `pnpm dev` uses `run-p` to launch it alongside `zfb dev`. z-index tokens are
-> package-owned in 7.x, so the old `gen:z-index` / `check:z-index` scripts are gone.
+> package-owned, so the old `gen:z-index` / `check:z-index` scripts are gone.
+> Omitting `themePack` selects Graphite, the default theme pack.
 
 ## Content Structure
 
@@ -61,7 +62,7 @@ All documentation files use `.mdx` format with YAML frontmatter.
 
 ### Frontmatter Fields
 
-The whole site is configured through a single `zudoDoc({...})` call in `zfb.config.ts` (zudo-doc 7.x single-entry config API). The frontmatter schema and content collections are package-owned defaults (`@takazudo/zudo-doc`) — there is NO `src/config/docs-schema.ts` and NO `src/content.config.ts`. To override the schema, pass `buildDocsSchema` to `zudoDoc()`.
+The whole site is configured through a single `zudoDoc({...})` call in `zfb.config.ts` (zudo-doc single-entry config API). The frontmatter schema and content collections are package-owned defaults (`@takazudo/zudo-doc`) — there is NO `src/config/docs-schema.ts` and NO `src/content.config.ts`. To override the schema, pass `buildDocsSchema` to `zudoDoc()`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -243,7 +244,7 @@ The `tauri-wisdom` skill (`.claude/skills/tauri-wisdom/SKILL.md`) is **generated
 
 ## Project Layout
 
-The zudo-doc 7.x host surface is provided by the `@takazudo/zudo-doc`
+The zudo-doc 10 host surface is provided by the `@takazudo/zudo-doc`
 package (config API, components, utils, types, route helpers, design tokens are
 all package-owned). The project ships only a thin shell:
 
@@ -265,7 +266,7 @@ scripts/                  # host check/gen scripts (drift, pins, links, doc-skil
 - Base path: `/` (root — no subpath prefix)
 - Live URL: `https://zudo-tauri-wisdom.takazudomodular.com/`
 - Config: `zfb.config.ts` — the entire site config is one `zudoDoc({...})` call
-  (`@takazudo/zudo-doc/config`); there is no `src/config/settings.ts` in 7.x
+  (`@takazudo/zudo-doc/config`); there is no `src/config/settings.ts`
 
 ## CI/CD
 

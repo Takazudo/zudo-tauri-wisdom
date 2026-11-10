@@ -57,7 +57,9 @@ export default defineConfig(
     // `home.wide`, so the package-owned route is used again and index.tsx is
     // back to the locked 1-line re-export.
     home: { wide: true },
-    themePack: "fjord",
+    // Graphite, the zudo-doc 10 default. create-zudo-doc writes `themePack`
+    // only when the choice differs from the pack omission resolves to. On a
+    // light/dark site that pack is Graphite, so the field stays unset.
 
     // ── Locales (bilingual EN default + JA) ───────────────────────────────
     locales: {

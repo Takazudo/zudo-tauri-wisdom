@@ -1,10 +1,12 @@
-# Reconciled against published create-zudo-doc 7.0.0 (2026-10-15).
-# Every base/i18n file was compared; tsconfig.json now matches exactly.
+# Reconciled against published create-zudo-doc 10.0.0 (2026-11-10).
+# Every base/i18n file was compared; tsconfig.json still matches exactly.
 # Allowlisted paths are manually reconciled on each scaffold bump because
 # the drift gate skips their contents. Keep these divergences intentional.
 
-# Noto Sans JP/Futura fonts, normal title/logo weights, and Fjord token overrides.
-# The package CSS imports/layers remain identical to the 7.0.0 template.
+# Noto Sans JP/Futura fonts and normal title/logo weights. These token
+# overrides win over whichever theme pack is active, including Graphite
+# (selected by omitting themePack). The package CSS imports/layers remain
+# identical to the 10.0.0 template.
 src/styles/global.css
 
 # Published docHistory transformer output: DocHistoryBoundary is registered
@@ -13,8 +15,10 @@ pages/docs/[[...slug]].tsx
 pages/[locale]/docs/[[...slug]].tsx
 
 # Local tauri-wisdom name and Claude/Codex targets; generated skill is ignored.
-# The local fork still uses fixed EN/JA directories and pnpm format:md; it has
-# not adopted upstream main-worktree path resolution, config-based locale
-# discovery, refusal to overwrite real symlink targets, or Bash 3.2 support.
-# Upstream script bytes are unchanged between published 6.0.0 and 7.0.0.
+# The local fork still uses fixed EN/JA directories and pnpm format:md. It
+# keeps the short skill text rather than the 10.0.0 AUTHORING.md placement
+# essay, config-based locale discovery, symlink-overwrite refusal, or Bash 3.2
+# support. The main-worktree path is now read from `git worktree list
+# --porcelain` so a checkout path containing a space is not truncated
+# (create-zudo-doc 9.1.4).
 scripts/setup-doc-skill.sh
